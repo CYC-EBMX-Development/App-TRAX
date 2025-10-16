@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
-import '../global.dart';
-import '../widget/button.dart';
+import '../../common/global.dart';
+import '../../common/widget/button.dart';
 
 class WelcomePage extends StatefulWidget {
   const WelcomePage({super.key});
