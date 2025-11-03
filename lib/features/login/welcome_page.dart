@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../common/global.dart';
 import '../../common/widget/button.dart';
+import 'login_page.dart';
 
 class WelcomePage extends StatefulWidget {
   const WelcomePage({super.key});
@@ -82,6 +83,10 @@ class _WelcomePageState extends State<WelcomePage> {
           borderRadius: traXborderRadius,
           minimumSize: const Size(170, 51),
           onPressed: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => ExotekQuadricyclePage()),
+            );
           },
           backgroundColor: WidgetStateProperty.all<Color?>(Colors.transparent),
           side: WidgetStateProperty.all(

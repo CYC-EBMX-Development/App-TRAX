@@ -1,0 +1,211 @@
+import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:video_player/video_player.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'dart:io' show Platform;
+
+import '../../common/global.dart';
+import '../../common/widget/button.dart';
+
+// mp4背景视频文件压缩命令
+// ffmpeg -i exotek.mp4 -vf "scale=854:480,fps=15" -c:v libx264 -crf 30 -c:a aac -b:a 128k exotek_h264_854x480_15fps_30crf.mp4
+// ffmpeg -i x-series.mov -vf "scale=854:480,fps=30" -c:v libx264 -crf 20 -c:a aac -b:a 128k x-series_h264_854x480_30fps_20crf.mp4
+
+class ExotekQuadricyclePage extends StatefulWidget {
+  const ExotekQuadricyclePage({super.key});
+
+  @override
+  State<ExotekQuadricyclePage> createState() => _SplashPage();
+}
+
+class _SplashPage extends State<ExotekQuadricyclePage> {
+  VideoPlayerController? _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!kIsWeb && Platform.isWindows) {
+    }
+    else{
+      _controller = VideoPlayerController.asset('assets/mp4/x-series_h264_854x480_30fps_20crf.mp4')
+      ..initialize().then((_) {
+        _controller!.setLooping(true);
+        _controller!.setVolume(0.0);
+        _controller!.play();
+        setState(() {});
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    Localizations.maybeLocaleOf(context);
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
+        body: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (_controller != null && _controller!.value.isInitialized)
+              FittedBox(
+                fit: BoxFit.cover,
+                child: SizedBox(
+                  width: _controller!.value.size.width,
+                  height: _controller!.value.size.height,
+                  child: VideoPlayer(_controller!),
+                ),
+              ),
+            Container(color: Colors.black54, alignment: Alignment.center),
+            Padding(
+              padding: EdgeInsets.all(20.0),
+              child: _mainPage(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _mainPage(){
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('TRA-X',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 30,
+              fontWeight: FontWeight.w700,
+            )
+        ),
+        Text('Login',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 40,
+              fontWeight: FontWeight.w700,
+            )
+        ),
+        TextField(
+          decoration: InputDecoration(
+            labelText: 'Email',
+            hintText: 'jonchan@cycmotor.com',
+            border: OutlineInputBorder(),
+          ),
+          onChanged: (value) {
+            print('输入的内容: $value');
+          },
+        ),
+        MyElevatedButton(
+          borderRadius: traXborderRadius,
+          minimumSize: const Size(170, 51),
+          onPressed: () {
+          },
+          child: Text('Log in' , style: TextStyle(
+            color: Colors.black,
+            fontSize: 24.0,
+            fontWeight: FontWeight.w700,)),
+        ),
+        Row(
+          children: [
+            Expanded(
+              child: Divider(
+                color: Colors.grey[400],
+                indent: 20,
+              ),
+            ),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16),
+              child: Text(
+                'OR',
+                style: TextStyle(
+                  color: Colors.grey[600],
+                  fontSize: 14,
+                ),
+              ),
+            ),
+            Expanded(
+              child: Divider(
+                color: Colors.grey[400],
+                endIndent: 20,
+              ),
+            ),
+          ],
+        ),
+        logoButton('assets/images/logo googleg 48dp.png','Continue with Google'),
+        logoButton('assets/images/Facebook Logo.png','Continue with Facebook'),
+        logoButton('assets/images/Apple Logo.png','Continue with Apple'),
+        Row(
+          children: [
+            Text('Don’t have an account?',
+                style: TextStyle(
+                  color: Color(0xFFCBCBCB),
+                  fontSize: 14,)
+            ),
+            Text('Sign up.',
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+
+  Widget logoButton(String image, String text, {VoidCallback? onPressed}){
+    return MyElevatedButton(
+      borderRadius: traXborderRadius,
+      minimumSize: const Size(170, 51),
+      backgroundColor: WidgetStateProperty.all<Color?>(Color(0xFF1A1B1C)),
+      onPressed: onPressed,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.start,
+        children: [
+          SizedBox(width: 15),
+          Image.asset(
+            image,
+            width: 24,
+            height: 24,
+          ),
+          SizedBox(width: 20),
+          Text(
+            text ,
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 16.0,
+              fontWeight: FontWeight.w500,
+            )
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+
+// void _launchURL(String url) async {
+//   final Uri uri = Uri.parse(url);
+//   if (!await launchUrl(uri)) {
+//     throw Exception('无法打开: $url');
+//   }
+// }
+
+Widget buttonDecoration(Widget child, Color color){
+  return Container(
+    decoration: BoxDecoration(
+      border: Border.all(
+        color: color,
+        width: 2.0,
+      ),
+      borderRadius: BorderRadius.circular(5.0),
+    ),
+    child: child,
+  );
+}
