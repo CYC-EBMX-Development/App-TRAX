@@ -25,11 +25,14 @@ class MyApp extends StatelessWidget {
         textTheme: TextTheme(
           displayLarge: const TextStyle(
             fontSize: 50.0,
+            color: Colors.white,
             fontWeight: FontWeight.bold,
           ),
+          displayMedium: TextStyle(color: Colors.white),
           titleLarge: const TextStyle(fontSize: 24.0),
           bodyMedium: TextStyle(
             fontSize: 14.0,
+            color: Colors.white,
             fontFamily: traXFontFamily,
           ),
         ),

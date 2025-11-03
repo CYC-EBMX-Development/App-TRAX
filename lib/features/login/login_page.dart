@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io' show Platform;
 
 import '../../common/global.dart';
 import '../../common/widget/button.dart';
+import '../../common/widget/textField.dart';
 
 // mp4背景视频文件压缩命令
 // ffmpeg -i exotek.mp4 -vf "scale=854:480,fps=15" -c:v libx264 -crf 30 -c:a aac -b:a 128k exotek_h264_854x480_15fps_30crf.mp4
@@ -64,7 +64,7 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
             Container(color: Colors.black54, alignment: Alignment.center),
             Padding(
               padding: EdgeInsets.all(20.0),
-              child: _mainPage(),
+              child: SingleChildScrollView(child:_mainPage()),
             ),
           ],
         ),
@@ -73,9 +73,11 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
   }
 
   Widget _mainPage(){
+    double screenWidth = MediaQuery.of(context).size.width;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        SizedBox(height:40),
         Text('TRA-X',
             style: TextStyle(
               color: Colors.white,
@@ -83,6 +85,7 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
               fontWeight: FontWeight.w700,
             )
         ),
+        SizedBox(height:50),
         Text('Login',
             style: TextStyle(
               color: Colors.white,
@@ -90,19 +93,31 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
               fontWeight: FontWeight.w700,
             )
         ),
-        TextField(
-          decoration: InputDecoration(
-            labelText: 'Email',
-            hintText: 'jonchan@cycmotor.com',
-            border: OutlineInputBorder(),
-          ),
-          onChanged: (value) {
-            print('输入的内容: $value');
-          },
+        SizedBox(height:40),
+        TraXTextField(
+          labelText: 'Email',
+          hintText:'jonchan@cycmotor.com',
+          onPressed: (){},
         ),
+        SizedBox(height: 15),
+        TraXTextField(
+          labelText: 'Password',
+          hintText:'Password',
+          inPutPassword: true,
+          onPressed: (){},
+        ),
+        SizedBox(height: 15),
+        Row(
+          children: [
+            Expanded(child: SizedBox()),
+            Text('Forgot Password?',style:TextStyle(fontWeight: FontWeight.w600)),
+          ],
+        ),
+        SizedBox(height: 30),
         MyElevatedButton(
           borderRadius: traXborderRadius,
-          minimumSize: const Size(170, 51),
+          minimumSize: Size(screenWidth, 51),
+          backgroundColor: WidgetStateProperty.all<Color?>(Color(0xFFC0C0C0)),
           onPressed: () {
           },
           child: Text('Log in' , style: TextStyle(
@@ -110,11 +125,12 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
             fontSize: 24.0,
             fontWeight: FontWeight.w700,)),
         ),
+        SizedBox(height: 15),
         Row(
           children: [
             Expanded(
               child: Divider(
-                color: Colors.grey[400],
+                color: Color(0xFF5E5E5E),
                 indent: 20,
               ),
             ),
@@ -123,23 +139,28 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
               child: Text(
                 'OR',
                 style: TextStyle(
-                  color: Colors.grey[600],
+                  color: Color(0xFF949494),
                   fontSize: 14,
                 ),
               ),
             ),
             Expanded(
               child: Divider(
-                color: Colors.grey[400],
+                color: Color(0xFF5E5E5E),
                 endIndent: 20,
               ),
             ),
           ],
         ),
+        SizedBox(height: 10),
         logoButton('assets/images/logo googleg 48dp.png','Continue with Google'),
+        SizedBox(height: 10),
         logoButton('assets/images/Facebook Logo.png','Continue with Facebook'),
+        SizedBox(height: 10),
         logoButton('assets/images/Apple Logo.png','Continue with Apple'),
+        SizedBox(height: 10),
         Row(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text('Don’t have an account?',
                 style: TextStyle(
@@ -149,7 +170,6 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
             Text('Sign up.',
               style: TextStyle(
                 fontWeight: FontWeight.w600,
-                color: Colors.white,
               ),
             ),
           ],
