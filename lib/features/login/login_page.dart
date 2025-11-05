@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:tra_x/features/login/sign_up_page.dart';
+import 'package:tra_x/features/login/verification.dart';
 import 'package:video_player/video_player.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io' show Platform;
@@ -21,6 +22,7 @@ class ExotekQuadricyclePage extends StatefulWidget {
 
 class _SplashPage extends State<ExotekQuadricyclePage> {
   VideoPlayerController? _controller;
+  int mod = 0;
 
   @override
   void initState() {
@@ -73,6 +75,25 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
     );
   }
 
+  Widget _password(){
+    return Column(children: [
+      SizedBox(height: 15),
+      TraXTextField(
+        labelText: 'Password',
+        hintText:'Password',
+        inPutPassword: true,
+        onPressed: (){},
+      ),
+      SizedBox(height: 15),
+      Row(
+        children: [
+          Expanded(child: SizedBox()),
+          Text('Forgot Password?',style:TextStyle(fontWeight: FontWeight.w600)),
+        ],
+      ),
+    ]);
+  }
+
   Widget _mainPage(){
     double screenWidth = MediaQuery.of(context).size.width;
     return Column(
@@ -100,26 +121,24 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
           hintText:'jonchan@cycmotor.com',
           onPressed: (){},
         ),
-        SizedBox(height: 15),
-        TraXTextField(
-          labelText: 'Password',
-          hintText:'Password',
-          inPutPassword: true,
-          onPressed: (){},
-        ),
-        SizedBox(height: 15),
-        Row(
-          children: [
-            Expanded(child: SizedBox()),
-            Text('Forgot Password?',style:TextStyle(fontWeight: FontWeight.w600)),
-          ],
-        ),
+        if(mod==1) _password(),
         SizedBox(height: 30),
         MyElevatedButton(
           borderRadius: Global.traXborderRadius,
           minimumSize: Size(screenWidth, 51),
           backgroundColor: WidgetStateProperty.all<Color?>(Color(0xFFC0C0C0)),
           onPressed: () {
+            if(mod ==1){
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => VerificationPage()),
+              );
+            }
+            else if(mod == 0){
+              setState(() {
+                mod=1;
+              });
+            }
           },
           child: Text('Log in' , style: TextStyle(
             color: Colors.black,
