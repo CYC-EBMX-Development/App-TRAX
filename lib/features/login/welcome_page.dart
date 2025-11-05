@@ -70,7 +70,7 @@ class _WelcomePageState extends State<WelcomePage> {
       mainAxisAlignment: MainAxisAlignment.spaceAround,
       children: [
         MyElevatedButton(
-          borderRadius: traXborderRadius,
+          borderRadius: Global.traXborderRadius,
           minimumSize: const Size(170, 51),
           onPressed: () {
           },
@@ -80,7 +80,7 @@ class _WelcomePageState extends State<WelcomePage> {
             fontWeight: FontWeight.w700,)),
         ),
         MyElevatedButton(
-          borderRadius: traXborderRadius,
+          borderRadius: Global.traXborderRadius,
           minimumSize: const Size(170, 51),
           onPressed: () {
             Navigator.push(

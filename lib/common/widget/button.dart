@@ -53,7 +53,7 @@ class MyElevatedButton extends StatelessWidget {
               decoration: TextDecoration.none,
               fontSize: textFontSize,
               fontWeight: textFontWeight,
-              fontFamily: traXFontFamily,
+              fontFamily: Global.traXFontFamily,
             ),
             textAlign: TextAlign.left,
           )

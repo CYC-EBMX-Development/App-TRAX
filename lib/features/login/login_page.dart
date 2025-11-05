@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:tra_x/features/login/sign_up_page.dart';
 import 'package:video_player/video_player.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io' show Platform;
@@ -115,7 +116,7 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
         ),
         SizedBox(height: 30),
         MyElevatedButton(
-          borderRadius: traXborderRadius,
+          borderRadius: Global.traXborderRadius,
           minimumSize: Size(screenWidth, 51),
           backgroundColor: WidgetStateProperty.all<Color?>(Color(0xFFC0C0C0)),
           onPressed: () {
@@ -167,9 +168,15 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
                   color: Color(0xFFCBCBCB),
                   fontSize: 14,)
             ),
-            Text('Sign up.',
-              style: TextStyle(
-                fontWeight: FontWeight.w600,
+            GestureDetector(
+              onTap: () async {
+                await Navigator.push(context,  MaterialPageRoute(builder: (context) => SignUpPage()));
+                await _controller!.play();
+              },
+              child: Text('Sign up.',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
           ],
@@ -181,7 +188,7 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
 
   Widget logoButton(String image, String text, {VoidCallback? onPressed}){
     return MyElevatedButton(
-      borderRadius: traXborderRadius,
+      borderRadius: Global.traXborderRadius,
       minimumSize: const Size(170, 51),
       backgroundColor: WidgetStateProperty.all<Color?>(Color(0xFF1A1B1C)),
       onPressed: onPressed,

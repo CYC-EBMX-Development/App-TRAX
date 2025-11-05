@@ -1,5 +1,11 @@
 import 'package:flutter/material.dart';
 
-const String traXFontFamily = 'ChakraPetch';
-const double traXborderRadius = 5.0;
-const Color traXthemeColor = Colors.black;
+class Global {
+  // 不要构造函数
+  Global._();
+
+  static String appName = 'TraX';
+  static String traXFontFamily = 'ChakraPetch';
+  static double traXborderRadius = 5.0;
+  static Color traXthemeColor = Colors.black;
+}

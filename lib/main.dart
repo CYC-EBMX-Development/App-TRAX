@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
 import 'common/global.dart';
 import 'features/login/welcome_page.dart';
 
@@ -21,7 +22,8 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'TraX',
       theme: ThemeData(
-        fontFamily: traXFontFamily,
+        fontFamily: Global.traXFontFamily,
+        scaffoldBackgroundColor: Colors.black,
         textTheme: TextTheme(
           displayLarge: const TextStyle(
             fontSize: 50.0,
@@ -33,7 +35,7 @@ class MyApp extends StatelessWidget {
           bodyMedium: TextStyle(
             fontSize: 14.0,
             color: Colors.white,
-            fontFamily: traXFontFamily,
+            fontFamily: Global.traXFontFamily,
           ),
         ),
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
