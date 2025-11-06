@@ -5,6 +5,8 @@ import 'package:tra_x/common/widget/button.dart';
 import 'package:tra_x/common/widget/textField.dart';
 import 'package:video_player/video_player.dart';
 
+import 'verification.dart';
+
 /// 创建账号
 class SignUpPage extends StatefulWidget {
   const SignUpPage({super.key});
@@ -138,7 +140,9 @@ class _SignUpPageState extends State<SignUpPage> {
       borderRadius: Global.traXborderRadius,
       minimumSize: const Size(170, 51),
       backgroundColor: WidgetStateProperty.all<Color?>(Color(0xFFC0C0C0)),
-      onPressed: () {},
+      onPressed: () {
+        Navigator.push(context, MaterialPageRoute(builder: (context) => VerificationPage()));
+      },
       child: Text(
         'Sign up',
         style: TextStyle(color: Colors.black, fontSize: 24.0, fontWeight: FontWeight.w700),
