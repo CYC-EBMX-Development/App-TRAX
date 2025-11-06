@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:tra_x/common/global.dart';
-import 'package:tra_x/common/widget/button.dart';
-import 'package:tra_x/common/widget/textField.dart';
+import 'package:tra_x/common/widgets/trax_button.dart';
+import 'package:tra_x/common/widgets/trax_text_field.dart';
 import 'package:video_player/video_player.dart';
 
-import 'verification.dart';
+import 'verification_page.dart';
 
 /// 创建账号
 class SignUpPage extends StatefulWidget {
@@ -101,7 +101,7 @@ class _SignUpPageState extends State<SignUpPage> {
 
   // 暂时先复制login_page的代码,等以后复用组件
   Widget _logoButton(String image, String text, {VoidCallback? onPressed}) {
-    return MyElevatedButton(
+    return TraxButton(
       borderRadius: Global.traXborderRadius,
       minimumSize: const Size(170, 51),
       backgroundColor: WidgetStateProperty.all<Color?>(Color(0xFF1A1B1C)),
@@ -136,7 +136,7 @@ class _SignUpPageState extends State<SignUpPage> {
   }
 
   Widget _signupButton() {
-    return MyElevatedButton(
+    return TraxButton(
       borderRadius: Global.traXborderRadius,
       minimumSize: const Size(170, 51),
       backgroundColor: WidgetStateProperty.all<Color?>(Color(0xFFC0C0C0)),

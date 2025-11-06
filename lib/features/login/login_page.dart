@@ -1,14 +1,14 @@
-import 'package:flutter/material.dart';
-import 'package:tra_x/features/login/sign_up_page.dart';
-import 'package:tra_x/features/login/verification.dart';
-import 'package:video_player/video_player.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/material.dart';
+import 'package:tra_x/common/widgets/trax_button.dart';
+import 'package:tra_x/common/widgets/trax_text_field.dart';
+import 'package:tra_x/features/login/sign_up_page.dart';
+import 'package:tra_x/features/login/verification_page.dart';
+import 'package:video_player/video_player.dart';
+
 import '../../common/global.dart';
-import '../../common/widget/button.dart';
-import '../../common/widget/textField.dart';
-import 'EmailValidator.dart';
 
 // mp4背景视频文件压缩命令
 // ffmpeg -i exotek.mp4 -vf "scale=854:480,fps=15" -c:v libx264 -crf 30 -c:a aac -b:a 128k exotek_h264_854x480_15fps_30crf.mp4
@@ -127,7 +127,7 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
         ),
         if(mod==1) _password(),
         SizedBox(height: 30),
-        MyElevatedButton(
+        TraxButton(
           borderRadius: Global.traXborderRadius,
           minimumSize: Size(screenWidth, 51),
           backgroundColor: WidgetStateProperty.all<Color?>(Color(0xFFC0C0C0)),
@@ -210,7 +210,7 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
 
 
   Widget logoButton(String image, String text, {VoidCallback? onPressed}){
-    return MyElevatedButton(
+    return TraxButton(
       borderRadius: Global.traXborderRadius,
       minimumSize: const Size(170, 51),
       backgroundColor: WidgetStateProperty.all<Color?>(Color(0xFF1A1B1C)),

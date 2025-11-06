@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:tra_x/common/widgets/trax_button.dart';
+import 'package:tra_x/common/widgets/trax_text_field.dart';
 import 'dart:async';
 
 import '../../common/global.dart';
-import '../../common/widget/button.dart';
-import '../../common/widget/textField.dart';
 
 class VerificationPage extends StatefulWidget {
   const VerificationPage({super.key});
@@ -99,7 +99,7 @@ class _VerificationState extends State<VerificationPage> {
         ),
         SizedBox(height: 25),
         Row(children: [
-          _seconds <= 0 ? MyElevatedButton(
+          _seconds <= 0 ? TraxButton(
             borderRadius: Global.traXborderRadius,
             onPressed: () {
               setState(()=>_seconds = 3);

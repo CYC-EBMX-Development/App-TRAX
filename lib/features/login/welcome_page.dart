@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:tra_x/common/global.dart';
+import 'package:tra_x/common/widgets/trax_button.dart';
 
-import '../../common/global.dart';
-import '../../common/widget/button.dart';
 import 'login_page.dart';
 
 class WelcomePage extends StatefulWidget {
@@ -69,7 +69,7 @@ class _WelcomePageState extends State<WelcomePage> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceAround,
       children: [
-        MyElevatedButton(
+        TraxButton(
           borderRadius: Global.traXborderRadius,
           minimumSize: const Size(170, 51),
           onPressed: () {
@@ -79,7 +79,7 @@ class _WelcomePageState extends State<WelcomePage> {
             fontSize: 24.0,
             fontWeight: FontWeight.w700,)),
         ),
-        MyElevatedButton(
+        TraxButton(
           borderRadius: Global.traXborderRadius,
           minimumSize: const Size(170, 51),
           onPressed: () {

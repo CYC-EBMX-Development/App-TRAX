@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../global.dart';
 
-class MyElevatedButton extends StatelessWidget {
+class TraxButton extends StatelessWidget {
   /// 有选中效果的按钮。有亮色和暗色
-  const MyElevatedButton({
+  const TraxButton({
     super.key,
     this.onPressed,
     this.style,
