@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 
 import '../../common/global.dart';
 import '../../common/widget/button.dart';
@@ -13,7 +14,27 @@ class VerificationPage extends StatefulWidget {
 
 class _VerificationState extends State<VerificationPage> {
   List<FocusNode> focusNodes = List.generate(6, (index) => FocusNode());
+  String message = '';
+  Timer? _timer;
+  int _seconds = 0;
 
+  void setMessage({String? value}){
+    setState(() {
+      message = value??'';
+    });
+  }
+
+  void _startTimer() {
+    _timer = Timer.periodic(Duration(seconds: 1), (timer) {
+      setState(() {
+        _seconds--;
+        print('object----------'+_seconds.toString());
+        if(_seconds==0){
+          _timer?.cancel();
+        }
+      });
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -76,21 +97,30 @@ class _VerificationState extends State<VerificationPage> {
           ],
         ),
         SizedBox(height: 25),
-        MyElevatedButton(
-          borderRadius: Global.traXborderRadius,
-          minimumSize: const Size(140, 37),
-          onPressed: () {
-          },
-          backgroundColor: WidgetStateProperty.all<Color?>(Colors.transparent),
-          side: WidgetStateProperty.all(
-            BorderSide(color: Colors.white, width: 1),
-          ),
-          child: Text('Get a new code' , style: TextStyle(
-            color: Colors.white,
-            fontSize: 13.0,
-            fontWeight: FontWeight.w600,)),
+        Row(children: [
+          _seconds <= 0 ? MyElevatedButton(
+            borderRadius: Global.traXborderRadius,
+            onPressed: () {
+              setState(()=>_seconds = 2);
+              _startTimer();
+              //CircularProgressIndicator();
+            },
+            backgroundColor: WidgetStateProperty.all<Color?>(Colors.transparent),
+            side: WidgetStateProperty.all(
+              BorderSide(color: Colors.white, width: 1),
+            ),
+            child: Text('Get a new code' , style: TextStyle(
+              color: Colors.white,
+              fontSize: 13.0,
+              fontWeight: FontWeight.w600,)),
+          ): _CircularProgress (),
+          SizedBox(width: 20),
+          if(_seconds > 0) Text('Try again in 0:${_seconds}',style: TextStyle(color: Color(0xFFA0A0A0),)),
+        ],),
+        SizedBox(height: 15),
+        SizedBox(height: height/3,
+          child: Text(message,style: TextStyle(color: Colors.red),),
         ),
-        SizedBox(height: height/3),
         Text(
           'Open email app',
           style: TextStyle(
@@ -102,6 +132,31 @@ class _VerificationState extends State<VerificationPage> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _CircularProgress (){
+    return Container(
+      width: 142.5,
+      height: 40,
+      margin: EdgeInsets.fromLTRB(0, 4, 0, 4),
+      decoration: BoxDecoration(
+        border: Border.all(
+          color: Color(0xFF919191),
+          width: 1,
+        ),
+        borderRadius: BorderRadius.circular(Global.traXborderRadius),
+      ),
+      child: Row(mainAxisAlignment:MainAxisAlignment.center,children: [
+        SizedBox(
+          width: 20,
+          height: 20,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF919191)),
+          ),
+        ),
+      ],),
     );
   }
 }
