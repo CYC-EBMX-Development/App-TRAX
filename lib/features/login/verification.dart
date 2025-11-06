@@ -93,7 +93,8 @@ class _VerificationState extends State<VerificationPage> {
             SingleDigitInput(focusNode: focusNodes[1],nextFocus:(){focusNodes[2].requestFocus();}),
             SingleDigitInput(focusNode: focusNodes[2],nextFocus:(){focusNodes[3].requestFocus();}),
             SingleDigitInput(focusNode: focusNodes[3],nextFocus:(){focusNodes[4].requestFocus();}),
-            SingleDigitInput(focusNode: focusNodes[4],nextFocus:(){}),
+            SingleDigitInput(focusNode: focusNodes[4],nextFocus:(){focusNodes[5].requestFocus();}),
+            SingleDigitInput(focusNode: focusNodes[5],nextFocus:(){}),
           ],
         ),
         SizedBox(height: 25),
@@ -101,7 +102,7 @@ class _VerificationState extends State<VerificationPage> {
           _seconds <= 0 ? MyElevatedButton(
             borderRadius: Global.traXborderRadius,
             onPressed: () {
-              setState(()=>_seconds = 2);
+              setState(()=>_seconds = 3);
               _startTimer();
               //CircularProgressIndicator();
             },
