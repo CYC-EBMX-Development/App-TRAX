@@ -8,6 +8,7 @@ import 'dart:io' show Platform;
 import '../../common/global.dart';
 import '../../common/widget/button.dart';
 import '../../common/widget/textField.dart';
+import 'EmailValidator.dart';
 
 // mp4背景视频文件压缩命令
 // ffmpeg -i exotek.mp4 -vf "scale=854:480,fps=15" -c:v libx264 -crf 30 -c:a aac -b:a 128k exotek_h264_854x480_15fps_30crf.mp4
@@ -23,6 +24,9 @@ class ExotekQuadricyclePage extends StatefulWidget {
 class _SplashPage extends State<ExotekQuadricyclePage> {
   VideoPlayerController? _controller;
   int mod = 0;
+  TextEditingController emailController = TextEditingController();
+  TextEditingController passwordController = TextEditingController();
+
 
   @override
   void initState() {
@@ -82,7 +86,7 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
         labelText: 'Password',
         hintText:'Password',
         inPutPassword: true,
-        onPressed: (){},
+        controller: passwordController,
       ),
       SizedBox(height: 15),
       Row(
@@ -119,7 +123,7 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
         TraXTextField(
           labelText: 'Email',
           hintText:'jonchan@cycmotor.com',
-          onPressed: (){},
+          controller: emailController,
         ),
         if(mod==1) _password(),
         SizedBox(height: 30),

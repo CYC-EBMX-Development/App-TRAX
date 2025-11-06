@@ -6,12 +6,12 @@ class TraXTextField extends StatefulWidget {
     required this.labelText,
     required this.hintText,
     this.inPutPassword = false,
-    required this.onPressed,
+    required this.controller,
   });
   final String labelText;
   final String hintText;
   final bool inPutPassword;
-  final VoidCallback onPressed;
+  final TextEditingController controller ;
 
   @override
   State<TraXTextField> createState() => _TraXTextFieldPage();
@@ -22,6 +22,7 @@ class  _TraXTextFieldPage extends State<TraXTextField> {
   @override
   Widget build(BuildContext context) {
     return TextField(
+      controller: widget.controller,
       style: const TextStyle(
         color: Colors.white,
       ),
@@ -74,7 +75,6 @@ class  _TraXTextFieldPage extends State<TraXTextField> {
       ),
       onChanged: (value) {
         print('输入的内容: $value');
-        widget.onPressed;
       },
     );
   }
@@ -120,6 +120,7 @@ class _SingleDigitInputState extends State<SingleDigitInput> {
               width: 1,
             ),
             borderRadius: BorderRadius.all(Radius.circular(10)),
+
           ),
           //contentPadding: EdgeInsets.all(16),
         ),

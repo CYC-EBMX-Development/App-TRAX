@@ -15,6 +15,7 @@ class SignUpPage extends StatefulWidget {
 
 class _SignUpPageState extends State<SignUpPage> {
   VideoPlayerController? _controller;
+  TextEditingController emailController = TextEditingController();
 
   @override
   void initState() {
@@ -84,7 +85,7 @@ class _SignUpPageState extends State<SignUpPage> {
             _logoButton('assets/images/Facebook Logo.png', 'Continue with Facebook'),
             Padding(padding: const EdgeInsets.symmetric(vertical: 40), child: _orWidget()),
             // input
-            TraXTextField(labelText: 'Email', hintText: '', onPressed: () {}),
+            TraXTextField(labelText: 'Email', hintText: '',controller: emailController),
             const SizedBox(height: 40),
             _signupButton(),
             // By continuing, you are agreeing to our Terms of Services and Privacy Policy.
