@@ -1,5 +1,6 @@
 import 'dart:io' show Platform;
 
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:tra_x/common/widgets/trax_button.dart';
@@ -8,7 +9,9 @@ import 'package:tra_x/features/login/sign_up_page.dart';
 import 'package:tra_x/features/login/verification_page.dart';
 import 'package:video_player/video_player.dart';
 
+import '../../common/dio/dio.dart';
 import '../../common/global.dart';
+import '../../common/utils/validator_util.dart';
 
 // mp4背景视频文件压缩命令
 // ffmpeg -i exotek.mp4 -vf "scale=854:480,fps=15" -c:v libx264 -crf 30 -c:a aac -b:a 128k exotek_h264_854x480_15fps_30crf.mp4
@@ -23,14 +26,20 @@ class ExotekQuadricyclePage extends StatefulWidget {
 
 class _SplashPage extends State<ExotekQuadricyclePage> {
   VideoPlayerController? _controller;
-  int mod = 0;
   TextEditingController emailController = TextEditingController();
   TextEditingController passwordController = TextEditingController();
-
+  bool isEmail = false;
 
   @override
   void initState() {
     super.initState();
+    void _validateForm() {
+      final isValid = ValidatorUtil.isEmailValid(emailController.text) &&
+          passwordController.text.length > 5;
+      setState(() => isEmail = isValid);
+    }
+    emailController.addListener(_validateForm);
+    passwordController.addListener(_validateForm);
     if (!kIsWeb && Platform.isWindows) {
     }
     else{
@@ -125,24 +134,26 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
           hintText:'jonchan@cycmotor.com',
           controller: emailController,
         ),
-        if(mod==1) _password(),
+        _password(),
         SizedBox(height: 30),
         TraxButton(
           borderRadius: Global.traXborderRadius,
           minimumSize: Size(screenWidth, 51),
-          backgroundColor: WidgetStateProperty.all<Color?>(Color(0xFFC0C0C0)),
-          onPressed: () {
-            if(mod ==1){
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => VerificationPage()),
-              );
+          backgroundColor: isEmail?
+            WidgetStateProperty.all<Color?>(Colors.white):
+            WidgetStateProperty.all<Color?>(Color(0xFFC0C0C0)),
+          onPressed: () async {
+            if(!isEmail){
+              return;
             }
-            else if(mod == 0){
-              setState(() {
-                mod=1;
-              });
-            }
+            // Navigator.push(
+            //   context,
+            //   MaterialPageRoute(builder: (context) => VerificationPage()),
+            // );
+            Response response = await loginWithPasswd(
+                emailController.text,
+                passwordController.text);
+            print('object================' + response.toString());
           },
           child: Text('Log in' , style: TextStyle(
             color: Colors.black,
