@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:tra_x/common/widgets/trax_button.dart';
 import 'package:tra_x/common/widgets/trax_text_field.dart';
+import 'package:tra_x/features/login/forgot_password_page.dart';
 import 'package:tra_x/features/login/sign_up_page.dart';
 import 'package:tra_x/features/login/verification_page.dart';
 import 'package:video_player/video_player.dart';
@@ -30,6 +31,7 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
   TextEditingController passwordController = TextEditingController();
   bool isEmail = false;
 
+
   @override
   void initState() {
     super.initState();
@@ -41,15 +43,17 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
     emailController.addListener(_validateForm);
     passwordController.addListener(_validateForm);
     if (!kIsWeb && Platform.isWindows) {
-    }
-    else{
-      _controller = VideoPlayerController.asset('assets/mp4/x-series_h264_854x480_30fps_20crf.mp4')
-      ..initialize().then((_) {
-        _controller!.setLooping(true);
-        _controller!.setVolume(0.0);
-        _controller!.play();
-        setState(() {});
-      });
+    } else {
+      _controller =
+          VideoPlayerController.asset(
+              'assets/mp4/x-series_h264_854x480_30fps_20crf.mp4',
+            )
+            ..initialize().then((_) {
+              _controller!.setLooping(true);
+              _controller!.setVolume(0.0);
+              _controller!.play();
+              setState(() {});
+            });
     }
   }
 
@@ -80,7 +84,7 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
             Container(color: Colors.black54, alignment: Alignment.center),
             Padding(
               padding: EdgeInsets.all(20.0),
-              child: SingleChildScrollView(child:_mainPage()),
+              child: SingleChildScrollView(child: _mainPage()),
             ),
           ],
         ),
@@ -88,50 +92,67 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
     );
   }
 
-  Widget _password(){
-    return Column(children: [
-      SizedBox(height: 15),
-      TraXTextField(
-        labelText: 'Password',
-        hintText:'Password',
-        inPutPassword: true,
-        controller: passwordController,
-      ),
-      SizedBox(height: 15),
-      Row(
-        children: [
-          Expanded(child: SizedBox()),
-          Text('Forgot Password?',style:TextStyle(fontWeight: FontWeight.w600)),
-        ],
-      ),
-    ]);
+  Widget _password() {
+    return Column(
+      children: [
+        SizedBox(height: 15),
+        TraXTextField(
+          labelText: 'Password',
+          hintText: 'Password',
+          inPutPassword: true,
+          controller: passwordController,
+        ),
+        SizedBox(height: 15),
+        Row(
+          children: [
+            Expanded(child: SizedBox()),
+            GestureDetector(
+              child: Text(
+                'Forgot Password?',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              onTap: () async {
+                await _controller?.pause();
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => ForgotPasswordPage()),
+                );
+                await _controller?.play();
+              },
+            ),
+          ],
+        ),
+      ],
+    );
   }
 
-  Widget _mainPage(){
+  Widget _mainPage() {
     double screenWidth = MediaQuery.of(context).size.width;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SizedBox(height:40),
-        Text('TRA-X',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 30,
-              fontWeight: FontWeight.w700,
-            )
+        SizedBox(height: 40),
+        Text(
+          'TRA-X',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 30,
+            fontWeight: FontWeight.w700,
+          ),
         ),
-        SizedBox(height:50),
-        Text('Login',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 40,
-              fontWeight: FontWeight.w700,
-            )
+        SizedBox(height: 50),
+        Text(
+          'Login',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 40,
+            fontWeight: FontWeight.w700,
+          ),
         ),
-        SizedBox(height:40),
+        SizedBox(height: 40),
         TraXTextField(
           labelText: 'Email',
-          hintText:'jonchan@cycmotor.com',
+          hintText: 'jonchan@cycmotor.com',
           controller: emailController,
         ),
         _password(),
@@ -155,62 +176,57 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
                 passwordController.text);
             print('object================' + response.toString());
           },
-          child: Text('Log in' , style: TextStyle(
-            color: Colors.black,
-            fontSize: 24.0,
-            fontWeight: FontWeight.w700,)),
+          child: Text(
+            'Log in',
+            style: TextStyle(
+              color: Colors.black,
+              fontSize: 24.0,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
         ),
         SizedBox(height: 15),
         Row(
           children: [
-            Expanded(
-              child: Divider(
-                color: Color(0xFF5E5E5E),
-                indent: 20,
-              ),
-            ),
+            Expanded(child: Divider(color: Color(0xFF5E5E5E), indent: 20)),
             Padding(
               padding: EdgeInsets.symmetric(horizontal: 16),
               child: Text(
                 'OR',
-                style: TextStyle(
-                  color: Color(0xFF949494),
-                  fontSize: 14,
-                ),
+                style: TextStyle(color: Color(0xFF949494), fontSize: 14),
               ),
             ),
-            Expanded(
-              child: Divider(
-                color: Color(0xFF5E5E5E),
-                endIndent: 20,
-              ),
-            ),
+            Expanded(child: Divider(color: Color(0xFF5E5E5E), endIndent: 20)),
           ],
         ),
         SizedBox(height: 10),
-        logoButton('assets/images/logo googleg 48dp.png','Continue with Google'),
+        logoButton(
+          'assets/images/logo googleg 48dp.png',
+          'Continue with Google',
+        ),
         SizedBox(height: 10),
-        logoButton('assets/images/Facebook Logo.png','Continue with Facebook'),
+        logoButton('assets/images/Facebook Logo.png', 'Continue with Facebook'),
         SizedBox(height: 10),
-        logoButton('assets/images/Apple Logo.png','Continue with Apple'),
+        logoButton('assets/images/Apple Logo.png', 'Continue with Apple'),
         SizedBox(height: 10),
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text('Don’t have an account?',
-                style: TextStyle(
-                  color: Color(0xFFCBCBCB),
-                  fontSize: 14,)
+            Text(
+              'Don’t have an account?',
+              style: TextStyle(color: Color(0xFFCBCBCB), fontSize: 14),
             ),
             GestureDetector(
               onTap: () async {
-                await Navigator.push(context,  MaterialPageRoute(builder: (context) => SignUpPage()));
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => SignUpPage()),
+                );
                 await _controller!.play();
               },
-              child: Text('Sign up.',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                ),
+              child: Text(
+                'Sign up.',
+                style: TextStyle(fontWeight: FontWeight.w600),
               ),
             ),
           ],
@@ -219,8 +235,7 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
     );
   }
 
-
-  Widget logoButton(String image, String text, {VoidCallback? onPressed}){
+  Widget logoButton(String image, String text, {VoidCallback? onPressed}) {
     return TraxButton(
       borderRadius: Global.traXborderRadius,
       minimumSize: const Size(170, 51),
@@ -230,26 +245,21 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
         mainAxisAlignment: MainAxisAlignment.start,
         children: [
           SizedBox(width: 15),
-          Image.asset(
-            image,
-            width: 24,
-            height: 24,
-          ),
+          Image.asset(image, width: 24, height: 24),
           SizedBox(width: 20),
           Text(
-            text ,
+            text,
             style: TextStyle(
               color: Colors.white,
               fontSize: 16.0,
               fontWeight: FontWeight.w500,
-            )
+            ),
           ),
         ],
       ),
     );
   }
 }
-
 
 // void _launchURL(String url) async {
 //   final Uri uri = Uri.parse(url);
@@ -258,13 +268,10 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
 //   }
 // }
 
-Widget buttonDecoration(Widget child, Color color){
+Widget buttonDecoration(Widget child, Color color) {
   return Container(
     decoration: BoxDecoration(
-      border: Border.all(
-        color: color,
-        width: 2.0,
-      ),
+      border: Border.all(color: color, width: 2.0),
       borderRadius: BorderRadius.circular(5.0),
     ),
     child: child,

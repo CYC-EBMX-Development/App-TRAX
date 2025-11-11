@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:tra_x/common/global.dart';
@@ -17,17 +18,20 @@ class SignUpPage extends StatefulWidget {
 
 class _SignUpPageState extends State<SignUpPage> {
   VideoPlayerController? _controller;
-  TextEditingController emailController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
 
   @override
   void initState() {
-    _controller = VideoPlayerController.asset('assets/mp4/x-series_h264_854x480_30fps_20crf.mp4')
-      ..initialize().then((_) {
-        _controller!.setLooping(true);
-        _controller!.setVolume(0.0);
-        _controller!.play();
-        setState(() {});
-      });
+    _controller =
+        VideoPlayerController.asset(
+            'assets/mp4/x-series_h264_854x480_30fps_20crf.mp4',
+          )
+          ..initialize().then((_) {
+            _controller!.setLooping(true);
+            _controller!.setVolume(0.0);
+            _controller!.play();
+            setState(() {});
+          });
     super.initState();
   }
 
@@ -72,27 +76,60 @@ class _SignUpPageState extends State<SignUpPage> {
               children: [
                 GestureDetector(
                   onTap: () => Navigator.of(context).pop(),
-                  child: SvgPicture.asset('assets/images/back_sign_up.svg', width: 35, height: 35),
+                  child: SvgPicture.asset(
+                    'assets/images/back_sign_up.svg',
+                    width: 35,
+                    height: 35,
+                  ),
                 ),
               ],
             ),
             const SizedBox(height: 40),
             // title
-            Text('Create an Account', style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold)),
+            Text(
+              'Create an Account',
+              style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold),
+            ),
             const SizedBox(height: 20),
             // google login
-            _logoButton('assets/images/logo googleg 48dp.png', 'Continue with Google'),
+            _logoButton(
+              'assets/images/logo googleg 48dp.png',
+              'Continue with Google',
+            ),
             SizedBox(height: 10),
             // facebook login
-            _logoButton('assets/images/Facebook Logo.png', 'Continue with Facebook'),
-            Padding(padding: const EdgeInsets.symmetric(vertical: 40), child: _orWidget()),
+            _logoButton(
+              'assets/images/Facebook Logo.png',
+              'Continue with Facebook',
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 40),
+              child: _orWidget(),
+            ),
             // input
-            TraXTextField(labelText: 'Email', hintText: '',controller: emailController),
+            TraXTextField(
+              labelText: 'Email',
+              hintText: '',
+              controller: _emailController,
+            ),
             const SizedBox(height: 40),
-            _signupButton(),
-            // By continuing, you are agreeing to our Terms of Services and Privacy Policy.
+            _signupButton(() {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => VerificationPage()),
+              );
+            }),
             const SizedBox(height: 24),
-            _termsOfService(),
+            _TermsAndServiceWidget(
+              onTapTerms: () {
+                // 跳转到服务条款页面
+                debugPrint('点击了服务条款');
+              },
+              onTapPrivacy: () {
+                // 跳转到隐私协议页面
+                debugPrint('点击了隐私协议');
+              },
+            ),
           ],
         ),
       ),
@@ -114,7 +151,11 @@ class _SignUpPageState extends State<SignUpPage> {
           SizedBox(width: 20),
           Text(
             text,
-            style: TextStyle(color: Colors.white, fontSize: 16.0, fontWeight: FontWeight.w500),
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 16.0,
+              fontWeight: FontWeight.w500,
+            ),
           ),
         ],
       ),
@@ -128,43 +169,69 @@ class _SignUpPageState extends State<SignUpPage> {
         Expanded(child: Divider(color: Color(0xFF5E5E5E))),
         Padding(
           padding: EdgeInsets.symmetric(horizontal: 16),
-          child: Text('OR', style: TextStyle(color: Color(0xFF949494), fontSize: 14)),
+          child: Text(
+            'OR',
+            style: TextStyle(color: Color(0xFF949494), fontSize: 14),
+          ),
         ),
         Expanded(child: Divider(color: Color(0xFF5E5E5E))),
       ],
     );
   }
 
-  Widget _signupButton() {
+  Widget _signupButton(void Function() onPressed) {
     return TraxButton(
       borderRadius: Global.traXborderRadius,
       minimumSize: const Size(170, 51),
       backgroundColor: WidgetStateProperty.all<Color?>(Color(0xFFC0C0C0)),
-      onPressed: () {
-        Navigator.push(context, MaterialPageRoute(builder: (context) => VerificationPage()));
-      },
+      onPressed: onPressed,
       child: Text(
         'Sign up',
-        style: TextStyle(color: Colors.black, fontSize: 24.0, fontWeight: FontWeight.w700),
+        style: TextStyle(
+          color: Colors.black,
+          fontSize: 24.0,
+          fontWeight: FontWeight.w700,
+        ),
       ),
     );
   }
+}
 
-  Widget _termsOfService() {
+class _TermsAndServiceWidget extends StatelessWidget {
+  const _TermsAndServiceWidget({
+    required this.onTapTerms,
+    required this.onTapPrivacy,
+  });
+
+  final void Function() onTapTerms;
+  final void Function() onTapPrivacy;
+
+  final Color _textColor = const Color(0xFFDADADA);
+
+  @override
+  Widget build(BuildContext context) {
     return Text.rich(
       TextSpan(
-        style: TextStyle(fontSize: 14, color: Color(0xFFDADADA)),
+        style: TextStyle(fontSize: 14, color: _textColor),
         children: [
           TextSpan(text: 'By continuing, you are agreeing to our '),
           // 下划线
           TextSpan(
             text: 'Terms of Services',
-            style: TextStyle(decoration: TextDecoration.underline, decorationColor: Color(0xFFDADADA)),
+            style: TextStyle(
+              decoration: TextDecoration.underline,
+              decorationColor: Color(0xFFDADADA),
+            ),
+            recognizer: TapGestureRecognizer()..onTap = onTapTerms,
           ),
           TextSpan(text: ' and '),
           TextSpan(
             text: 'Privacy Policy.',
-            style: TextStyle(decoration: TextDecoration.underline, decorationColor: Color(0xFFDADADA)),
+            style: TextStyle(
+              decoration: TextDecoration.underline,
+              decorationColor: Color(0xFFDADADA),
+            ),
+            recognizer: TapGestureRecognizer()..onTap = onTapPrivacy,
           ),
         ],
       ),
