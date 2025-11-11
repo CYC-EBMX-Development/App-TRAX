@@ -21,7 +21,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
       context,
       MaterialPageRoute(
         builder: (context) => VerificationPage(
-          onVerify: (String code) async => '',
+          email: _controller.text,
           onNext: () {
             Navigator.push(
               context,

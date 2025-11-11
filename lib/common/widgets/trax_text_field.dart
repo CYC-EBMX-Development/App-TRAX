@@ -84,10 +84,12 @@ class SingleDigitInput extends StatefulWidget {
   const SingleDigitInput({
     super.key,
     required this.focusNode,
-  required this.nextFocus,
+    required this.nextFocus,
+    required this.controller,
   });
   final FocusNode focusNode;
   final VoidCallback nextFocus;
+  final TextEditingController controller ;
 
   @override
   _SingleDigitInputState createState() => _SingleDigitInputState();
@@ -100,6 +102,7 @@ class _SingleDigitInputState extends State<SingleDigitInput> {
       height: 60,
       width: 50,
       child: TextField(
+        controller: widget.controller,
         maxLength: 1,
         keyboardType: TextInputType.number,
         textAlign: TextAlign.center,

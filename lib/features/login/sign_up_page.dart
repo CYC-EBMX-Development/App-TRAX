@@ -116,7 +116,9 @@ class _SignUpPageState extends State<SignUpPage> {
             _signupButton(() {
               Navigator.push(
                 context,
-                MaterialPageRoute(builder: (context) => VerificationPage()),
+                MaterialPageRoute(builder: (context) => VerificationPage(
+                  email: _emailController.text,
+                )),
               );
             }),
             const SizedBox(height: 24),

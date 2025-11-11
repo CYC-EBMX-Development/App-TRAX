@@ -1,20 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:tra_x/common/widgets/trax_button.dart';
-import 'package:tra_x/common/widgets/trax_text_field.dart';
+import 'package:pinput/pinput.dart';
 import 'dart:async';
+import 'package:dio/dio.dart';
 
+import '../../common/dio/dio.dart';
 import '../../common/global.dart';
 
 class VerificationPage extends StatefulWidget {
-  const VerificationPage({super.key, this.onVerify, this.onNext});
+  const VerificationPage({super.key,required this.email ,this.onNext});
 
-  /// 检查校验码的回调
-  ///
-  /// `code`: 验证码
-  ///
-  /// `return`: 校验成功返回空字符串，否则返回错误信息
-  final Future<String> Function(String code)? onVerify;
-
+  final String email;
   /// 跳转的回调
   ///
   /// 如果校验成功，则跳转到下一个页面
@@ -25,10 +21,31 @@ class VerificationPage extends StatefulWidget {
 }
 
 class _VerificationState extends State<VerificationPage> {
-  List<FocusNode> focusNodes = List.generate(6, (index) => FocusNode());
+  final TextEditingController _pinController = TextEditingController();
+  final FocusNode _pinFocusNode = FocusNode();
   String message = '';
   Timer? _timer;
   int _seconds = 0;
+  bool _hasError = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _pinFocusNode.addListener((){
+      if(_pinFocusNode.hasFocus){
+        setState(() {
+          _hasError = false;
+        });
+      }
+    });
+    _sendCode();
+  }
+
+  Future<void> _sendCode() async {
+    Response response = await sendCode(
+      widget.email);
+    print('object'+response.toString());
+  }
 
   void setMessage({String? value}) {
     setState(() {
@@ -49,13 +66,18 @@ class _VerificationState extends State<VerificationPage> {
   }
 
   /// 输入完成
-  Future<void> _onInputComplete() async {
-    String code = '123456'; // 暂时写死，要从用户输入获取
-    final verified = await widget.onVerify?.call(code);
-    if (verified?.isEmpty ?? false) {
-      widget.onNext?.call();
+  Future<void> _onInputComplete(String code) async {
+    String example = '123456'; // 暂时写死，要从用户输入获取
+    Response response = await verifyCode(widget.email,code);
+    print('object'+response.toString());
+    if (code == example) {
+      print('验证成功');
     } else {
-      setMessage(value: '验证码错误');
+      _pinController.text = '';
+      _pinFocusNode.unfocus();
+      setState(() {
+        _hasError = true;
+      });
     }
   }
 
@@ -109,34 +131,39 @@ class _VerificationState extends State<VerificationPage> {
           ),
         ),
         SizedBox(height: 30),
-        Row(
+        Pinput(
+          focusNode: _pinFocusNode,
+          controller: _pinController,
+          length: 6,
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            SingleDigitInput(
-              focusNode: focusNodes[0],
-              nextFocus: () => focusNodes[1].requestFocus(),
+          defaultPinTheme: PinTheme(
+            width: 50,
+            height: 60,
+            textStyle: TextStyle(
+              fontSize: 24,
+              color: Colors.white,
             ),
-            SingleDigitInput(
-              focusNode: focusNodes[1],
-              nextFocus: () => focusNodes[2].requestFocus(),
+            decoration: BoxDecoration(
+              border: Border.all(color: _hasError? Colors.red :Color(0xFF454545)),
+              borderRadius: BorderRadius.circular(10),
             ),
-            SingleDigitInput(
-              focusNode: focusNodes[2],
-              nextFocus: () => focusNodes[3].requestFocus(),
+          ),
+          focusedPinTheme: PinTheme(
+            width: 50,
+            height: 60,
+            textStyle: TextStyle(
+              fontSize: 24,
+              color: Colors.white,
             ),
-            SingleDigitInput(
-              focusNode: focusNodes[3],
-              nextFocus: () => focusNodes[4].requestFocus(),
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.white),
+              borderRadius: BorderRadius.circular(10),
             ),
-            SingleDigitInput(
-              focusNode: focusNodes[4],
-              nextFocus: () => focusNodes[5].requestFocus(),
-            ),
-            SingleDigitInput(
-              focusNode: focusNodes[5],
-              nextFocus: () => _onInputComplete(),
-            ),
-          ],
+          ),
+          onCompleted: (pin) {
+            print('验证码输入完成: $pin');
+            _onInputComplete(pin);
+          },
         ),
         SizedBox(height: 25),
         Row(
@@ -145,7 +172,8 @@ class _VerificationState extends State<VerificationPage> {
                 ? TraxButton(
                     borderRadius: Global.traXborderRadius,
                     onPressed: () {
-                      setState(() => _seconds = 3);
+                      _sendCode();
+                      setState(() => _seconds = 30);
                       _startTimer();
                       //CircularProgressIndicator();
                     },

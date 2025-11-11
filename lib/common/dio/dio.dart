@@ -5,16 +5,18 @@ final dio = Dio(
     baseUrl: 'https://www.cycdeveloper.com/api/',
     connectTimeout: Duration(seconds: 5),
     receiveTimeout: Duration(seconds: 3),
-    headers: {
-      'Content-Type': 'application/json',
-    },
   ),
 );
 
 Future<Response>  loginWithPasswd (String username,String password) async {
   try {
-    return await dio.post( // 确保使用正确的 HTTP 方法
-      '/auth/loginByPwd', // 检查这个端点是否正确
+    return await dio.post(
+      '/auth/loginByPwd',
+      options: Options(
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      ),
       data: {
         'username': username,
         'password': password,
@@ -23,6 +25,42 @@ Future<Response>  loginWithPasswd (String username,String password) async {
     // 处理响应
   } catch (e) {
     print('登录错误: $e');
+    rethrow;
+  }
+}
+
+Future<Response> sendCode (String email) async {
+  try {
+    return await dio.post(
+      '/auth/send-code',
+      options: Options(
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+      ),
+      data: 'email=$email',
+    );
+    // 处理响应
+  } catch (e) {
+    print('登录错误: $e');
+    rethrow;
+  }
+}
+
+Future<Response> verifyCode (String email,String code) async {
+  try {
+    return await dio.post(
+      '/auth/verify-code',
+      options: Options(
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+      ),
+      data: 'email=$email&code=$code',
+    );
+    // 处理响应
+  } catch (e) {
+    print('登录错误1: $e');
     rethrow;
   }
 }

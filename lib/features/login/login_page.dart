@@ -167,14 +167,14 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
             if(!isEmail){
               return;
             }
-            // Navigator.push(
-            //   context,
-            //   MaterialPageRoute(builder: (context) => VerificationPage()),
-            // );
             Response response = await loginWithPasswd(
                 emailController.text,
                 passwordController.text);
             print('object================' + response.toString());
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => VerificationPage(email: emailController.text)),
+            );
           },
           child: Text(
             'Log in',
