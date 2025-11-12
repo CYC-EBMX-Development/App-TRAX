@@ -42,9 +42,12 @@ class _VerificationState extends State<VerificationPage> {
   }
 
   Future<void> _sendCode() async {
-    Response response = await sendCode(
-      widget.email);
-    print('object'+response.toString());
+    try{
+      Response response = await sendCode(email: widget.email);
+      print('object'+response.toString());
+    }catch(e){
+      print('object'+e.toString());
+    }
   }
 
   void setMessage({String? value}) {
@@ -67,12 +70,17 @@ class _VerificationState extends State<VerificationPage> {
 
   /// 输入完成
   Future<void> _onInputComplete(String code) async {
-    String example = '123456'; // 暂时写死，要从用户输入获取
-    Response response = await verifyCode(widget.email,code);
-    print('object'+response.toString());
-    if (code == example) {
-      print('验证成功');
-    } else {
+    try{
+      Response response = await verifyCode(
+          email: widget.email,
+          code: code);
+      print('object'+response.toString());
+      if(response.data){
+        print('objectT');
+      }else{
+        print('objectF');
+      }
+    }catch(e){
       _pinController.text = '';
       _pinFocusNode.unfocus();
       setState(() {
@@ -123,7 +131,7 @@ class _VerificationState extends State<VerificationPage> {
           ),
         ),
         Text(
-          'jonchan@cycmotor.com',
+          widget.email,
           style: TextStyle(
             fontSize: 16,
             fontWeight: FontWeight.w600,

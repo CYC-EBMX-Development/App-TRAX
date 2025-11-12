@@ -8,7 +8,7 @@ final dio = Dio(
   ),
 );
 
-Future<Response>  loginWithPasswd (String username,String password) async {
+Future<Response> loginWithPasswd ({required String username,required String password}) async {
   try {
     return await dio.post(
       '/auth/loginByPwd',
@@ -29,7 +29,7 @@ Future<Response>  loginWithPasswd (String username,String password) async {
   }
 }
 
-Future<Response> sendCode (String email) async {
+Future<Response> sendCode ({required String email}) async {
   try {
     return await dio.post(
       '/auth/send-code',
@@ -47,7 +47,7 @@ Future<Response> sendCode (String email) async {
   }
 }
 
-Future<Response> verifyCode (String email,String code) async {
+Future<Response> verifyCode ({required String email,required String code}) async {
   try {
     return await dio.post(
       '/auth/verify-code',
