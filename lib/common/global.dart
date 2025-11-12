@@ -8,4 +8,8 @@ class Global {
   static String traXFontFamily = 'ChakraPetch';
   static double traXborderRadius = 5.0;
   static Color traXthemeColor = Colors.black;
+
+  static GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+  static BuildContext? get context => navigatorKey.currentState?.context;
 }

@@ -2,6 +2,7 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:tra_x/common/utils/trax_validator_util.dart';
 import 'package:tra_x/common/widgets/trax_button.dart';
 import 'package:tra_x/common/widgets/trax_text_field.dart';
 import 'package:tra_x/features/login/forgot_password_page.dart';
@@ -12,7 +13,6 @@ import 'package:video_player/video_player.dart';
 import '../../common/dio/app_api.dart';
 import '../../common/dio/app_response.dart';
 import '../../common/global.dart';
-import '../../common/utils/validator_util.dart';
 
 // mp4背景视频文件压缩命令
 // ffmpeg -i exotek.mp4 -vf "scale=854:480,fps=15" -c:v libx264 -crf 30 -c:a aac -b:a 128k exotek_h264_854x480_15fps_30crf.mp4
@@ -35,13 +35,13 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
   @override
   void initState() {
     super.initState();
-    void _validateForm() {
-      final isValid = ValidatorUtil.isEmailValid(emailController.text) &&
+    void validateForm() {
+      final isValid = TraxValidatorUtil.isEmailValid(emailController.text) &&
           passwordController.text.length > 5;
       setState(() => isEmail = isValid);
     }
-    emailController.addListener(_validateForm);
-    passwordController.addListener(_validateForm);
+    emailController.addListener(validateForm);
+    passwordController.addListener(validateForm);
     if (!kIsWeb && Platform.isWindows) {
     } else {
       _controller =
