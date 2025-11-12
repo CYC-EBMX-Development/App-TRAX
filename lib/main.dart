@@ -20,6 +20,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
+      navigatorKey: Global.navigatorKey,
       title: 'TraX',
       theme: ThemeData(
         fontFamily: Global.traXFontFamily,

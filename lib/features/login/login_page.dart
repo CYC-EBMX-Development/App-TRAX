@@ -2,6 +2,7 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:tra_x/common/utils/trax_validator_util.dart';
 import 'package:tra_x/common/widgets/trax_button.dart';
 import 'package:tra_x/common/widgets/trax_text_field.dart';
 import 'package:tra_x/features/login/forgot_password_page.dart';
@@ -36,13 +37,13 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
   @override
   void initState() {
     super.initState();
-    void _validateForm() {
-      final isValid = ValidatorUtil.isEmailValid(emailController.text) &&
+    void validateForm() {
+      final isValid = TraxValidatorUtil.isEmailValid(emailController.text) &&
           passwordController.text.length > 5;
       setState(() => isEmail = isValid);
     }
-    emailController.addListener(_validateForm);
-    passwordController.addListener(_validateForm);
+    emailController.addListener(validateForm);
+    passwordController.addListener(validateForm);
     if (!kIsWeb && Platform.isWindows) {
     } else {
       _controller =

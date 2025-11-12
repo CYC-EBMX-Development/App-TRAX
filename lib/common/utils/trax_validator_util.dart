@@ -1,4 +1,4 @@
-class ValidatorUtil {
+class TraxValidatorUtil {
   /// 验证邮件格式
   static bool isEmailValid(String email) {
     if (email.isEmpty) return false;

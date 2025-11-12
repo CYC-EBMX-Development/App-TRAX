@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:tra_x/common/global.dart';
+import 'package:tra_x/common/utils/trax_log_util.dart';
+import 'package:tra_x/common/utils/trax_navigation_util.dart';
 import 'package:tra_x/common/widgets/trax_button.dart';
 import 'package:tra_x/common/widgets/trax_text_field.dart';
 import 'package:tra_x/features/login/reset_password_page.dart';
@@ -16,19 +18,14 @@ class ForgotPasswordPage extends StatefulWidget {
 class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
   final TextEditingController _controller = TextEditingController();
 
-  void _navigation() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => VerificationPage(
-          email: _controller.text,
-          onNext: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (context) => ResetPasswordPage()),
-            );
-          },
-        ),
+  void _navigate() {
+    TraxLogUtil.debug('跳转页面');
+    TraxNaviUtil.push(
+      VerificationPage(
+        email: _controller.text,
+        onNext: () {
+          TraxNaviUtil.push(ResetPasswordPage());
+        },
       ),
     );
   }
@@ -77,7 +74,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                 controller: _controller,
               ),
               SizedBox(height: 40),
-              _sendButton(() => _navigation()),
+              _sendButton(() => _navigate()),
             ],
           ),
         ),
