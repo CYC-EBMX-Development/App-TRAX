@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:tra_x/common/widgets/trax_button.dart';
 import 'package:pinput/pinput.dart';
 import 'dart:async';
-import 'package:dio/dio.dart';
 
-import '../../common/dio/dio.dart';
+import '../../common/dio/app_api.dart';
+import '../../common/dio/app_response.dart';
 import '../../common/global.dart';
 
 class VerificationPage extends StatefulWidget {
@@ -42,12 +42,7 @@ class _VerificationState extends State<VerificationPage> {
   }
 
   Future<void> _sendCode() async {
-    try{
-      Response response = await sendCode(email: widget.email);
-      print('object'+response.toString());
-    }catch(e){
-      print('object'+e.toString());
-    }
+    AppResponse response = await sendCode(email: widget.email);
   }
 
   void setMessage({String? value}) {
@@ -70,23 +65,17 @@ class _VerificationState extends State<VerificationPage> {
 
   /// 输入完成
   Future<void> _onInputComplete(String code) async {
-    try{
-      Response response = await verifyCode(
-          email: widget.email,
-          code: code);
-      print('object'+response.toString());
-      if(response.data){
-        print('objectT');
-      }else{
-        print('objectF');
-      }
-    }catch(e){
-      _pinController.text = '';
-      _pinFocusNode.unfocus();
-      setState(() {
-        _hasError = true;
-      });
-    }
+
+     AppResponse response = await verifyCode(
+       email: widget.email,
+       code: code);
+    // }catch(e){
+    //   _pinController.text = '';
+    //   _pinFocusNode.unfocus();
+    //   setState(() {
+    //     _hasError = true;
+    //   });
+    // }
   }
 
   @override

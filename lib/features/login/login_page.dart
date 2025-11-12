@@ -1,6 +1,5 @@
 import 'dart:io' show Platform;
 
-import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:tra_x/common/widgets/trax_button.dart';
@@ -10,7 +9,8 @@ import 'package:tra_x/features/login/sign_up_page.dart';
 import 'package:tra_x/features/login/verification_page.dart';
 import 'package:video_player/video_player.dart';
 
-import '../../common/dio/dio.dart';
+import '../../common/dio/app_api.dart';
+import '../../common/dio/app_response.dart';
 import '../../common/global.dart';
 import '../../common/utils/validator_util.dart';
 
@@ -167,15 +167,9 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
             if(!isEmail){
               return;
             }
-            try{
-              Response response = await loginWithPasswd(
-                  username: emailController.text,
-                  password: passwordController.text);
-              print('object================' + response.toString());
-            }
-            catch(e){
-              print('object================' + e.toString());
-            }
+            AppResponse response = await loginWithPasswd(
+              username: emailController.text,
+              password: passwordController.text);
             Navigator.push(
               context,
               MaterialPageRoute(builder: (context) => VerificationPage(email: emailController.text)),

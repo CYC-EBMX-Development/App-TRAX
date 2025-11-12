@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'app_response.dart';
 
 final dio = Dio(
   BaseOptions(
@@ -8,9 +9,10 @@ final dio = Dio(
   ),
 );
 
-Future<Response> loginWithPasswd ({required String username,required String password}) async {
+//
+Future<AppResponse> loginWithPasswd ({required String username,required String password}) async {
   try {
-    return await dio.post(
+    Response response = await dio.post(
       '/auth/loginByPwd',
       options: Options(
         headers: {
@@ -22,16 +24,16 @@ Future<Response> loginWithPasswd ({required String username,required String pass
         'password': password,
       },
     );
-    // 处理响应
+    return AppResponse.fromJson(response.data);
   } catch (e) {
-    print('登录错误: $e');
-    rethrow;
+    return AppResponse.error(e.toString());
   }
 }
 
-Future<Response> sendCode ({required String email}) async {
+//
+Future<AppResponse> sendCode ({required String email}) async {
   try {
-    return await dio.post(
+    Response response = await dio.post(
       '/auth/send-code',
       options: Options(
         headers: {
@@ -40,16 +42,16 @@ Future<Response> sendCode ({required String email}) async {
       ),
       data: 'email=$email',
     );
-    // 处理响应
+    return AppResponse.fromJson(response.data);
   } catch (e) {
-    print('登录错误: $e');
-    rethrow;
+    return AppResponse.error(e.toString());
   }
 }
 
-Future<Response> verifyCode ({required String email,required String code}) async {
+//
+Future<AppResponse> verifyCode ({required String email,required String code}) async {
   try {
-    return await dio.post(
+    Response response = await dio.post(
       '/auth/verify-code',
       options: Options(
         headers: {
@@ -58,9 +60,8 @@ Future<Response> verifyCode ({required String email,required String code}) async
       ),
       data: 'email=$email&code=$code',
     );
-    // 处理响应
+    return AppResponse.fromJson(response.data);
   } catch (e) {
-    print('登录错误1: $e');
-    rethrow;
+    return AppResponse.error(e.toString());
   }
 }
