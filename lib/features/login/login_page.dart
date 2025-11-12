@@ -13,6 +13,7 @@ import '../../common/dio/app_api.dart';
 import '../../common/dio/app_response.dart';
 import '../../common/global.dart';
 import '../../common/utils/validator_util.dart';
+import '../../common/widgets/trax_dialog.dart';
 
 // mp4背景视频文件压缩命令
 // ffmpeg -i exotek.mp4 -vf "scale=854:480,fps=15" -c:v libx264 -crf 30 -c:a aac -b:a 128k exotek_h264_854x480_15fps_30crf.mp4
@@ -170,10 +171,13 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
             AppResponse response = await loginWithPasswd(
               username: emailController.text,
               password: passwordController.text);
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (context) => VerificationPage(email: emailController.text)),
-            );
+            messageTopDialog(context,response.message,response.flag);
+            if(response.flag){
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => VerificationPage(email: emailController.text)),
+              );
+            }
           },
           child: Text(
             'Log in',
@@ -259,13 +263,6 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
     );
   }
 }
-
-// void _launchURL(String url) async {
-//   final Uri uri = Uri.parse(url);
-//   if (!await launchUrl(uri)) {
-//     throw Exception('无法打开: $url');
-//   }
-// }
 
 Widget buttonDecoration(Widget child, Color color) {
   return Container(

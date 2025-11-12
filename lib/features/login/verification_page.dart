@@ -6,6 +6,7 @@ import 'dart:async';
 import '../../common/dio/app_api.dart';
 import '../../common/dio/app_response.dart';
 import '../../common/global.dart';
+import '../../common/widgets/trax_dialog.dart';
 
 class VerificationPage extends StatefulWidget {
   const VerificationPage({super.key,required this.email ,this.onNext});
@@ -43,19 +44,13 @@ class _VerificationState extends State<VerificationPage> {
 
   Future<void> _sendCode() async {
     AppResponse response = await sendCode(email: widget.email);
-  }
-
-  void setMessage({String? value}) {
-    setState(() {
-      message = value ?? '';
-    });
+    messageTopDialog(context,response.message,response.flag);
   }
 
   void _startTimer() {
     _timer = Timer.periodic(Duration(seconds: 1), (timer) {
       setState(() {
         _seconds--;
-        print('object----------$_seconds');
         if (_seconds == 0) {
           _timer?.cancel();
         }
@@ -65,17 +60,17 @@ class _VerificationState extends State<VerificationPage> {
 
   /// 输入完成
   Future<void> _onInputComplete(String code) async {
-
      AppResponse response = await verifyCode(
        email: widget.email,
        code: code);
-    // }catch(e){
-    //   _pinController.text = '';
-    //   _pinFocusNode.unfocus();
-    //   setState(() {
-    //     _hasError = true;
-    //   });
-    // }
+     messageTopDialog(context,response.message,response.flag);
+     if(!response.flag) {
+       _pinController.text = '';
+       _pinFocusNode.unfocus();
+       setState(() {
+         _hasError = true;
+       });
+     }
   }
 
   @override
