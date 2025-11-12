@@ -13,7 +13,6 @@ import 'package:video_player/video_player.dart';
 import '../../common/dio/app_api.dart';
 import '../../common/dio/app_response.dart';
 import '../../common/global.dart';
-import '../../common/utils/validator_util.dart';
 import '../../common/widgets/trax_dialog.dart';
 
 // mp4背景视频文件压缩命令
