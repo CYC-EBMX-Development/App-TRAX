@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:loader_overlay/loader_overlay.dart';
 
 import 'common/global.dart';
 import 'features/login/welcome_page.dart';
@@ -18,30 +19,39 @@ class MyApp extends StatelessWidget {
   const MyApp({super.key});
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      navigatorKey: Global.navigatorKey,
-      title: 'TraX',
-      theme: ThemeData(
-        fontFamily: Global.traXFontFamily,
-        scaffoldBackgroundColor: Colors.black,
-        textTheme: TextTheme(
-          displayLarge: const TextStyle(
-            fontSize: 50.0,
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-          ),
-          displayMedium: TextStyle(color: Colors.white),
-          titleLarge: const TextStyle(fontSize: 24.0),
-          bodyMedium: TextStyle(
-            fontSize: 14.0,
-            color: Colors.white,
-            fontFamily: Global.traXFontFamily,
-          ),
+    return GlobalLoaderOverlay(
+      overlayWidgetBuilder: (_) => const Center(
+        child: CircularProgressIndicator(
+          strokeWidth: 6.0,
+          color: Colors.white,
         ),
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
       ),
-      home: const WelcomePage(),
+      overlayColor: Colors.black.withValues(alpha: 0.6),
+      child:MaterialApp(
+        debugShowCheckedModeBanner: false,
+        navigatorKey: Global.navigatorKey,
+        title: 'TraX',
+        theme: ThemeData(
+          fontFamily: Global.traXFontFamily,
+          scaffoldBackgroundColor: Colors.black,
+          textTheme: TextTheme(
+            displayLarge: const TextStyle(
+              fontSize: 50.0,
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+            ),
+            displayMedium: TextStyle(color: Colors.white),
+            titleLarge: const TextStyle(fontSize: 24.0),
+            bodyMedium: TextStyle(
+              fontSize: 14.0,
+              color: Colors.white,
+              fontFamily: Global.traXFontFamily,
+            ),
+          ),
+          colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        ),
+        home: const WelcomePage(),
+      )
     );
   }
 }

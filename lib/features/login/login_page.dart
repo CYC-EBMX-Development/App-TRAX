@@ -2,6 +2,7 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:loader_overlay/loader_overlay.dart';
 import 'package:tra_x/common/utils/trax_validator_util.dart';
 import 'package:tra_x/common/widgets/trax_button.dart';
 import 'package:tra_x/common/widgets/trax_text_field.dart';
@@ -168,16 +169,22 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
             if(!isEmail){
               return;
             }
+            context.loaderOverlay.show();
             AppResponse response = await loginWithPasswd(
               username: emailController.text,
               password: passwordController.text);
             messageTopDialog(context,response.message,response.flag);
             if(response.flag){
+              setState(() {
+                passwordController.text = '';
+              });
+              context.loaderOverlay.hide();
               Navigator.push(
                 context,
                 MaterialPageRoute(builder: (context) => VerificationPage(email: emailController.text)),
               );
             }
+            context.loaderOverlay.hide();
           },
           child: Text(
             'Log in',
