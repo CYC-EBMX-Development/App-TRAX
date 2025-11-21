@@ -2,6 +2,13 @@
 
 TRAX 是一款针对使用电动越野摩托车用户的社交应用。
 
+## 压缩背景视频
+
+```shell
+ffmpeg -i exotek.mp4 -vf "scale=854:480,fps=15" -c:v libx264 -crf 30 -c:a aac -b:a 128k login.mp4
+ffmpeg -i x-series.mov -vf "scale=854:480,fps=30" -c:v libx264 -crf 20 -c:a aac -b:a 128k login.mp4
+```
+
 ## 规范
 
 ### 命名法
@@ -41,8 +48,9 @@ TRAX 是一款针对使用电动越野摩托车用户的社交应用。
 
 ### 公共组件
 
-| 组件名称             | 描述          |
-|------------------|-------------|
-| TraxButton       | 按钮组件        |
-| TraxTextField    | 输入框组件       |
-| messageTopDialog | 上方消息弹窗组件    |
+| 组件名称             | 描述       |
+|------------------|----------|
+| TraxText         | 文字组件     |
+| TraxButton       | 按钮组件     |
+| TraxTextField    | 输入框组件    |
+| messageTopDialog | 上方消息弹窗组件 |

@@ -1,33 +1,15 @@
 import 'package:flutter/material.dart';
-import 'package:tra_x/common/global.dart';
+import 'package:get/get.dart';
 
 /// 导航工具类
 class TraxNaviUtil {
   TraxNaviUtil._();
 
-  static void push(Widget page) {
-    Navigator.push(
-      Global.context!,
-      MaterialPageRoute(builder: (context) => page),
-    );
-  }
+  static Future<T?>? push<T>(Widget page) => Get.to<T>(() => page);
 
-  static void pushReplace(Widget page) {
-    Navigator.pushReplacement(
-      Global.context!,
-      MaterialPageRoute(builder: (context) => page),
-    );
-  }
+  static Future<T?>? pushNamed<T>(String routeName) => Get.toNamed(routeName);
 
-  static void pushAndRemoveUntil(Widget page) {
-    Navigator.pushAndRemoveUntil(
-      Global.context!,
-      MaterialPageRoute(builder: (context) => page),
-      (route) => false,
-    );
-  }
+  static Future<T?>? pushAndRemoveAll<T>(String newRouteName) => Get.offAllNamed(newRouteName);
 
-  static void pop() {
-    Navigator.pop(Global.context!);
-  }
+  static void pop<T>({dynamic result}) => Get.back<T>(result: result);
 }

@@ -1,17 +1,19 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:tra_x/common/widgets/trax_button.dart';
 import 'package:pinput/pinput.dart';
 import 'dart:async';
 
-import '../../common/dio/app_api.dart';
-import '../../common/dio/app_response.dart';
+import '../../common/network/trax_api.dart';
+import '../../common/network/app_response.dart';
 import '../../common/global.dart';
 import '../../common/widgets/trax_dialog.dart';
 
 class VerificationPage extends StatefulWidget {
-  const VerificationPage({super.key,required this.email ,this.onNext});
+  const VerificationPage({super.key, required this.email, this.onNext});
 
   final String email;
+
   /// 跳转的回调
   ///
   /// 如果校验成功，则跳转到下一个页面
@@ -32,8 +34,8 @@ class _VerificationState extends State<VerificationPage> {
   @override
   void initState() {
     super.initState();
-    _pinFocusNode.addListener((){
-      if(_pinFocusNode.hasFocus){
+    _pinFocusNode.addListener(() {
+      if (_pinFocusNode.hasFocus) {
         setState(() {
           _hasError = false;
         });
@@ -43,8 +45,8 @@ class _VerificationState extends State<VerificationPage> {
   }
 
   Future<void> _sendCode() async {
-    AppResponse response = await sendCode(email: widget.email);
-    messageTopDialog(context,response.message,response.flag);
+    AppResponse response = await TraxApi.sendCode(email: widget.email);
+    TraxDialog.messageTopDialog(context, response.message, response.flag);
   }
 
   void _startTimer() {
@@ -60,17 +62,15 @@ class _VerificationState extends State<VerificationPage> {
 
   /// 输入完成
   Future<void> _onInputComplete(String code) async {
-     AppResponse response = await verifyCode(
-       email: widget.email,
-       code: code);
-     messageTopDialog(context,response.message,response.flag);
-     if(!response.flag) {
-       _pinController.text = '';
-       _pinFocusNode.unfocus();
-       setState(() {
-         _hasError = true;
-       });
-     }
+    AppResponse response = await TraxApi.verifyCode(email: widget.email, code: code);
+    TraxDialog.messageTopDialog(context, response.message, response.flag);
+    if (!response.flag) {
+      _pinController.text = '';
+      _pinFocusNode.unfocus();
+      setState(() {
+        _hasError = true;
+      });
+    }
   }
 
   @override
@@ -94,33 +94,21 @@ class _VerificationState extends State<VerificationPage> {
           onTap: () {
             Navigator.pop(context);
           },
-          child: Image.asset('assets/images/Return.png', width: 35, height: 35),
+          child: SvgPicture.asset('assets/svg/return.svg', width: 35, height: 35),
         ),
         SizedBox(height: 30),
         Text(
           'Verification',
-          style: TextStyle(
-            fontSize: 35,
-            fontWeight: FontWeight.w600,
-            color: Colors.white,
-          ),
+          style: TextStyle(fontSize: 35, fontWeight: FontWeight.w600, color: Colors.white),
         ),
         SizedBox(height: 30),
         Text(
           'Please enter the 6-digit code we sent to',
-          style: TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
-            color: Color(0xffDADADA),
-          ),
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Color(0xffDADADA)),
         ),
         Text(
           widget.email,
-          style: TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
-            color: Colors.white,
-          ),
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.white),
         ),
         SizedBox(height: 30),
         Pinput(
@@ -131,22 +119,16 @@ class _VerificationState extends State<VerificationPage> {
           defaultPinTheme: PinTheme(
             width: 50,
             height: 60,
-            textStyle: TextStyle(
-              fontSize: 24,
-              color: Colors.white,
-            ),
+            textStyle: TextStyle(fontSize: 24, color: Colors.white),
             decoration: BoxDecoration(
-              border: Border.all(color: _hasError? Colors.red :Color(0xFF454545)),
+              border: Border.all(color: _hasError ? Colors.red : Color(0xFF454545)),
               borderRadius: BorderRadius.circular(10),
             ),
           ),
           focusedPinTheme: PinTheme(
             width: 50,
             height: 60,
-            textStyle: TextStyle(
-              fontSize: 24,
-              color: Colors.white,
-            ),
+            textStyle: TextStyle(fontSize: 24, color: Colors.white),
             decoration: BoxDecoration(
               border: Border.all(color: Colors.white),
               borderRadius: BorderRadius.circular(10),
@@ -161,20 +143,13 @@ class _VerificationState extends State<VerificationPage> {
         Row(
           children: [
             _seconds <= 0
-                ? TraxButton(
-                    borderRadius: Global.traXborderRadius,
+                ? TraxButton.outlined(
                     onPressed: () {
                       _sendCode();
                       setState(() => _seconds = 30);
                       _startTimer();
                       //CircularProgressIndicator();
                     },
-                    backgroundColor: WidgetStateProperty.all<Color?>(
-                      Colors.transparent,
-                    ),
-                    side: WidgetStateProperty.all(
-                      BorderSide(color: Colors.white, width: 1),
-                    ),
                     child: Text(
                       'Get a new code',
                       style: TextStyle(
@@ -187,10 +162,7 @@ class _VerificationState extends State<VerificationPage> {
                 : _circularProgress(),
             SizedBox(width: 20),
             if (_seconds > 0)
-              Text(
-                'Try again in 0:$_seconds',
-                style: TextStyle(color: Color(0xFFA0A0A0)),
-              ),
+              Text('Try again in 0:$_seconds', style: TextStyle(color: Color(0xFFA0A0A0))),
           ],
         ),
         SizedBox(height: 15),
@@ -219,7 +191,7 @@ class _VerificationState extends State<VerificationPage> {
       margin: EdgeInsets.fromLTRB(0, 4, 0, 4),
       decoration: BoxDecoration(
         border: Border.all(color: Color(0xFF919191), width: 1),
-        borderRadius: BorderRadius.circular(Global.traXborderRadius),
+        borderRadius: BorderRadius.circular(Global.borderRadius),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,

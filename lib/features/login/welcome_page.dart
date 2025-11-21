@@ -1,101 +1,64 @@
 import 'package:flutter/material.dart';
-import 'package:tra_x/common/global.dart';
+import 'package:tra_x/common/utils/trax_navigation_util.dart';
 import 'package:tra_x/common/widgets/trax_button.dart';
+import 'package:tra_x/common/widgets/trax_text.dart';
+import 'package:tra_x/routers/trax_router.dart';
 
-import 'login_page.dart';
-
-class WelcomePage extends StatefulWidget {
+class WelcomePage extends StatelessWidget {
   const WelcomePage({super.key});
-  @override
-  State<WelcomePage> createState() => _WelcomePageState();
-}
 
-class _WelcomePageState extends State<WelcomePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: Container(
         decoration: BoxDecoration(
-          image:  DecorationImage(
-            image: AssetImage('assets/images/login.png'),
-            fit: BoxFit.fill,
-          )
+          image: DecorationImage(image: AssetImage('assets/images/login.png'), fit: BoxFit.fill),
         ),
-        child: Center(
-          child: Padding(
-            padding: EdgeInsets.all(15.0),
-            child: _mainCloumn(),
-          )
-        ),
+        child: Padding(padding: EdgeInsets.all(15.0), child: _mainColumn()),
       ),
     );
   }
-  Widget _mainCloumn(){
+
+  Widget _mainColumn() {
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         Spacer(flex: 12),
-        Text('EBMX',
-          style: TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-            fontSize: 50,
-          ),
-        ),
-        Text('TRA-X',
-          style: TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-            fontSize: 90,
-          ),
-        ),
+        TraxText('EBMX', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 50)),
+        TraxText('TRA-X', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 90)),
         Spacer(flex: 8),
-        Text('Spark Adventure, Track Every Thrill',
-          style: TextStyle(
-            color: Color(0xff909090),
-            fontWeight: FontWeight.w600,
-            fontSize: 32,
-          ),
+        TraxText(
+          'Spark Adventure, Track Every Thrill',
+          style: TextStyle(color: Color(0xff909090), fontWeight: FontWeight.w600, fontSize: 32),
         ),
         Spacer(flex: 3),
-        SizedBox(
-          height: 60,
-          child:_buttens(),
-        ),
+        _buttons(),
         Spacer(flex: 3),
       ],
     );
   }
-  Widget _buttens(){
+
+  Widget _buttons() {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceAround,
       children: [
-        TraxButton(
-          borderRadius: Global.traXborderRadius,
-          minimumSize: const Size(170, 51),
-          onPressed: () {
-          },
-          child: Text('Join Us' , style: TextStyle(
-            color: Colors.black,
-            fontSize: 24.0,
-            fontWeight: FontWeight.w700,)),
-        ),
-        TraxButton(
-          borderRadius: Global.traXborderRadius,
-          minimumSize: const Size(170, 51),
-          onPressed: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (context) => ExotekQuadricyclePage()),
-            );
-          },
-          backgroundColor: WidgetStateProperty.all<Color?>(Colors.transparent),
-          side: WidgetStateProperty.all(
-            BorderSide(color: Colors.white, width: 1),
+        Expanded(
+          child: TraxButton.filled(
+            text: 'Join Us',
+            textStyle: TextStyle(color: Colors.black, fontSize: 24, fontWeight: FontWeight.bold),
+            onPressed: () {},
           ),
-          child: Text('Log in' , style: TextStyle(
-            color: Colors.white,
-            fontSize: 24.0,
-            fontWeight: FontWeight.w700,)),
+        ),
+        const SizedBox(width: 16),
+        Expanded(
+          child: TraxButton.outlined(
+            text: 'Log in',
+            textStyle: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+            borderColor: Colors.white,
+            onPressed: () {
+              TraxNaviUtil.pushNamed(TraxRouter.loginPage);
+            },
+          ),
         ),
       ],
     );

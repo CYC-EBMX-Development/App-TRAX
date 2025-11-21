@@ -1,40 +1,50 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:tra_x/common/global.dart';
-import 'package:tra_x/common/utils/trax_log_util.dart';
+import 'package:get/get.dart';
 import 'package:tra_x/common/utils/trax_navigation_util.dart';
+import 'package:tra_x/common/utils/trax_validator_util.dart';
 import 'package:tra_x/common/widgets/trax_button.dart';
 import 'package:tra_x/common/widgets/trax_text_field.dart';
 import 'package:tra_x/features/login/reset_password_page.dart';
 import 'package:tra_x/features/login/verification_page.dart';
 
-class ForgotPasswordPage extends StatefulWidget {
-  const ForgotPasswordPage({super.key});
-
+// Get binding class
+class ForgotPasswordPageBinding extends Bindings {
   @override
-  State<ForgotPasswordPage> createState() => _ForgotPasswordPageState();
+  void dependencies() {
+    Get.put(ForgotPasswordPageController());
+  }
 }
 
-class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
-  final TextEditingController _controller = TextEditingController();
+// Get controller class
+class ForgotPasswordPageController extends GetxController {
+  final TextEditingController emailController = TextEditingController();
 
-  void _navigate() {
-    TraxLogUtil.debug('跳转页面');
+  final formKey = GlobalKey<FormState>();
+
+  @override
+  void onClose() {
+    emailController.dispose();
+    super.onClose();
+  }
+
+  void navigate() {
+    if (!formKey.currentState!.validate()) {
+      return;
+    }
     TraxNaviUtil.push(
       VerificationPage(
-        email: _controller.text,
+        email: emailController.text,
         onNext: () {
           TraxNaviUtil.push(ResetPasswordPage());
         },
       ),
     );
   }
+}
 
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
+class ForgotPasswordPage extends GetView<ForgotPasswordPageController> {
+  const ForgotPasswordPage({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -49,11 +59,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                 children: [
                   GestureDetector(
                     onTap: () => Navigator.of(context).pop(),
-                    child: SvgPicture.asset(
-                      'assets/images/back_sign_up.svg',
-                      width: 35,
-                      height: 35,
-                    ),
+                    child: SvgPicture.asset('assets/svg/return.svg', width: 35, height: 35),
                   ),
                 ],
               ),
@@ -68,13 +74,21 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
               ),
               SizedBox(height: 20),
-              TraXTextField(
-                labelText: 'Email',
-                hintText: 'Email Address',
-                controller: _controller,
+              Form(
+                key: controller.formKey,
+                child: Column(
+                  children: [
+                    TraXTextField(
+                      labelText: 'Email',
+                      hintText: 'Email Address',
+                      controller: controller.emailController,
+                      validator: TraxValidatorUtil.validateEmail,
+                    ),
+                  ],
+                ),
               ),
               SizedBox(height: 40),
-              _sendButton(() => _navigate()),
+              _sendButton(() => controller.navigate()),
             ],
           ),
         ),
@@ -83,19 +97,11 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
   }
 
   Widget _sendButton(void Function() onSend) {
-    return TraxButton(
-      borderRadius: Global.traXborderRadius,
-      minimumSize: const Size(170, 51),
-      backgroundColor: WidgetStateProperty.all<Color?>(Colors.white),
+    return TraxButton.filled(
+      text: 'Send',
+      backgroundColor: Colors.white,
+      textStyle: TextStyle(color: Colors.black, fontSize: 24.0, fontWeight: FontWeight.w700),
       onPressed: onSend,
-      child: Text(
-        'Send',
-        style: TextStyle(
-          color: Colors.black,
-          fontSize: 24.0,
-          fontWeight: FontWeight.w700,
-        ),
-      ),
     );
   }
 }

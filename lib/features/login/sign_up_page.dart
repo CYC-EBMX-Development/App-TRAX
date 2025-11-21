@@ -1,45 +1,63 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:tra_x/common/global.dart';
+import 'package:get/get.dart';
+import 'package:tra_x/common/utils/trax_navigation_util.dart';
+import 'package:tra_x/common/utils/trax_validator_util.dart';
 import 'package:tra_x/common/widgets/trax_button.dart';
+import 'package:tra_x/common/widgets/trax_or_widget.dart';
 import 'package:tra_x/common/widgets/trax_text_field.dart';
+import 'package:tra_x/features/login/widgets/login_with_button.dart';
 import 'package:video_player/video_player.dart';
 
 import 'verification_page.dart';
 
-/// 创建账号
-class SignUpPage extends StatefulWidget {
-  const SignUpPage({super.key});
-
+// binding page class
+class SignUpPageBinding implements Bindings {
   @override
-  State<SignUpPage> createState() => _SignUpPageState();
+  void dependencies() {
+    Get.put(SignUpController());
+  }
 }
 
-class _SignUpPageState extends State<SignUpPage> {
-  VideoPlayerController? _controller;
-  final TextEditingController _emailController = TextEditingController();
+// SignUpPage Controller class extends GetxController
+class SignUpController extends GetxController {
+  VideoPlayerController? videoPlayerController;
+  final TextEditingController emailController = TextEditingController();
+
+  final videoPlayerInit = false.obs;
+
+  final formKey = GlobalKey<FormState>();
 
   @override
-  void initState() {
-    _controller =
-        VideoPlayerController.asset(
-            'assets/mp4/x-series_h264_854x480_30fps_20crf.mp4',
-          )
-          ..initialize().then((_) {
-            _controller!.setLooping(true);
-            _controller!.setVolume(0.0);
-            _controller!.play();
-            setState(() {});
-          });
-    super.initState();
+  void onInit() {
+    videoPlayerController = VideoPlayerController.asset('assets/mp4/login.mp4')
+      ..initialize().then((_) {
+        videoPlayerController!.setLooping(true);
+        videoPlayerController!.setVolume(0.0);
+        videoPlayerController!.play();
+        videoPlayerInit.value = true;
+      });
+    super.onInit();
   }
 
   @override
-  void dispose() {
-    _controller?.dispose();
-    super.dispose();
+  void onClose() {
+    videoPlayerController?.dispose();
+    super.onClose();
   }
+
+  void toVerificationPage() {
+    if (!formKey.currentState!.validate()) {
+      return;
+    }
+    TraxNaviUtil.push(VerificationPage(email: emailController.text));
+  }
+}
+
+/// 创建账号
+class SignUpPage extends GetView<SignUpController> {
+  const SignUpPage({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -48,15 +66,19 @@ class _SignUpPageState extends State<SignUpPage> {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          if (_controller != null && _controller!.value.isInitialized)
-            FittedBox(
+          Obx(() {
+            if (!controller.videoPlayerInit.value) {
+              return SizedBox.expand();
+            }
+            return FittedBox(
               fit: BoxFit.cover,
               child: SizedBox(
-                width: _controller!.value.size.width,
-                height: _controller!.value.size.height,
-                child: VideoPlayer(_controller!),
+                width: controller.videoPlayerController!.value.size.width,
+                height: controller.videoPlayerController!.value.size.height,
+                child: VideoPlayer(controller.videoPlayerController!),
               ),
-            ),
+            );
+          }),
           Container(color: Colors.black54, alignment: Alignment.center),
           _signUpWidget(),
         ],
@@ -75,53 +97,40 @@ class _SignUpPageState extends State<SignUpPage> {
             Row(
               children: [
                 GestureDetector(
-                  onTap: () => Navigator.of(context).pop(),
-                  child: SvgPicture.asset(
-                    'assets/images/back_sign_up.svg',
-                    width: 35,
-                    height: 35,
-                  ),
+                  onTap: () => TraxNaviUtil.pop(),
+                  child: SvgPicture.asset('assets/svg/return.svg', width: 35, height: 35),
                 ),
               ],
             ),
             const SizedBox(height: 40),
             // title
-            Text(
-              'Create an Account',
-              style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 20),
+            Text('Create an Account', style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 50),
             // google login
-            _logoButton(
-              'assets/images/logo googleg 48dp.png',
-              'Continue with Google',
-            ),
+            LoginWithButton(type: LoginButtonType.google, onPressed: () {}),
             SizedBox(height: 10),
             // facebook login
-            _logoButton(
-              'assets/images/Facebook Logo.png',
-              'Continue with Facebook',
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 40),
-              child: _orWidget(),
-            ),
+            LoginWithButton(type: LoginButtonType.google, onPressed: () {}),
+            Padding(padding: const EdgeInsets.symmetric(vertical: 40), child: TraxOrWidget()),
             // input
-            TraXTextField(
-              labelText: 'Email',
-              hintText: '',
-              controller: _emailController,
+            Form(
+              key: controller.formKey,
+              child: TraXTextField(
+                labelText: 'Email',
+                hintText: '',
+                controller: controller.emailController,
+                validator: TraxValidatorUtil.validateEmail,
+              ),
             ),
-            const SizedBox(height: 40),
-            _signupButton(() {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => VerificationPage(
-                  email: _emailController.text,
-                )),
-              );
-            }),
-            const SizedBox(height: 24),
+            const SizedBox(height: 30),
+            TraxButton.filled(
+              text: 'Sign up',
+              textStyle: TextStyle(fontWeight: FontWeight.bold, color: Colors.black, fontSize: 24),
+              expand: true,
+              backgroundColor: Colors.white,
+              onPressed: () => controller.toVerificationPage(),
+            ),
+            const SizedBox(height: 16),
             _TermsAndServiceWidget(
               onTapTerms: () {
                 // 跳转到服务条款页面
@@ -137,73 +146,10 @@ class _SignUpPageState extends State<SignUpPage> {
       ),
     );
   }
-
-  // 暂时先复制login_page的代码,等以后复用组件
-  Widget _logoButton(String image, String text, {VoidCallback? onPressed}) {
-    return TraxButton(
-      borderRadius: Global.traXborderRadius,
-      minimumSize: const Size(170, 51),
-      backgroundColor: WidgetStateProperty.all<Color?>(Color(0xFF1A1B1C)),
-      onPressed: onPressed,
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.start,
-        children: [
-          SizedBox(width: 15),
-          Image.asset(image, width: 24, height: 24),
-          SizedBox(width: 20),
-          Text(
-            text,
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 16.0,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // 暂时复制login_page的代码,等以后复用组件
-  Widget _orWidget() {
-    return Row(
-      children: [
-        Expanded(child: Divider(color: Color(0xFF5E5E5E))),
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: 16),
-          child: Text(
-            'OR',
-            style: TextStyle(color: Color(0xFF949494), fontSize: 14),
-          ),
-        ),
-        Expanded(child: Divider(color: Color(0xFF5E5E5E))),
-      ],
-    );
-  }
-
-  Widget _signupButton(void Function() onPressed) {
-    return TraxButton(
-      borderRadius: Global.traXborderRadius,
-      minimumSize: const Size(170, 51),
-      backgroundColor: WidgetStateProperty.all<Color?>(Color(0xFFC0C0C0)),
-      onPressed: onPressed,
-      child: Text(
-        'Sign up',
-        style: TextStyle(
-          color: Colors.black,
-          fontSize: 24.0,
-          fontWeight: FontWeight.w700,
-        ),
-      ),
-    );
-  }
 }
 
 class _TermsAndServiceWidget extends StatelessWidget {
-  const _TermsAndServiceWidget({
-    required this.onTapTerms,
-    required this.onTapPrivacy,
-  });
+  const _TermsAndServiceWidget({required this.onTapTerms, required this.onTapPrivacy});
 
   final void Function() onTapTerms;
   final void Function() onTapPrivacy;

@@ -1,223 +1,111 @@
-import 'dart:io' show Platform;
-
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:loader_overlay/loader_overlay.dart';
+import 'package:get/get.dart';
 import 'package:tra_x/common/utils/trax_validator_util.dart';
 import 'package:tra_x/common/widgets/trax_button.dart';
+import 'package:tra_x/common/widgets/trax_or_widget.dart';
 import 'package:tra_x/common/widgets/trax_text_field.dart';
-import 'package:tra_x/features/login/forgot_password_page.dart';
-import 'package:tra_x/features/login/sign_up_page.dart';
-import 'package:tra_x/features/login/verification_page.dart';
+import 'package:tra_x/features/login/login_page_controller.dart';
+import 'package:tra_x/features/login/widgets/login_with_button.dart';
 import 'package:video_player/video_player.dart';
 
-import '../../common/dio/app_api.dart';
-import '../../common/dio/app_response.dart';
-import '../../common/global.dart';
-import '../../common/widgets/trax_dialog.dart';
-
-// mp4背景视频文件压缩命令
-// ffmpeg -i exotek.mp4 -vf "scale=854:480,fps=15" -c:v libx264 -crf 30 -c:a aac -b:a 128k exotek_h264_854x480_15fps_30crf.mp4
-// ffmpeg -i x-series.mov -vf "scale=854:480,fps=30" -c:v libx264 -crf 20 -c:a aac -b:a 128k x-series_h264_854x480_30fps_20crf.mp4
-
-class ExotekQuadricyclePage extends StatefulWidget {
-  const ExotekQuadricyclePage({super.key});
-
-  @override
-  State<ExotekQuadricyclePage> createState() => _SplashPage();
-}
-
-class _SplashPage extends State<ExotekQuadricyclePage> {
-  VideoPlayerController? _controller;
-  TextEditingController emailController = TextEditingController();
-  TextEditingController passwordController = TextEditingController();
-  bool isEmail = false;
-
-
-  @override
-  void initState() {
-    super.initState();
-    void validateForm() {
-      final isValid = TraxValidatorUtil.isEmailValid(emailController.text) &&
-          passwordController.text.length > 5;
-      setState(() => isEmail = isValid);
-    }
-    emailController.addListener(validateForm);
-    passwordController.addListener(validateForm);
-    if (!kIsWeb && Platform.isWindows) {
-    } else {
-      _controller =
-          VideoPlayerController.asset(
-              'assets/mp4/x-series_h264_854x480_30fps_20crf.mp4',
-            )
-            ..initialize().then((_) {
-              _controller!.setLooping(true);
-              _controller!.setVolume(0.0);
-              _controller!.play();
-              setState(() {});
-            });
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller?.dispose();
-    super.dispose();
-  }
+// GetView
+class LoginPage extends GetView<LoginPageController> {
+  const LoginPage({super.key});
 
   @override
   Widget build(BuildContext context) {
-    Localizations.maybeLocaleOf(context);
     return PopScope(
       canPop: false,
       child: Scaffold(
         body: Stack(
           fit: StackFit.expand,
           children: [
-            if (_controller != null && _controller!.value.isInitialized)
-              FittedBox(
+            Obx(() {
+              if (!controller.videoPlayerInit.value) {
+                return SizedBox.expand();
+              }
+              return FittedBox(
                 fit: BoxFit.cover,
                 child: SizedBox(
-                  width: _controller!.value.size.width,
-                  height: _controller!.value.size.height,
-                  child: VideoPlayer(_controller!),
+                  width: controller.videoPlayerController!.value.size.width,
+                  height: controller.videoPlayerController!.value.size.height,
+                  child: VideoPlayer(controller.videoPlayerController!),
                 ),
-              ),
+              );
+            }),
+            // black shadow
             Container(color: Colors.black54, alignment: Alignment.center),
-            Padding(
-              padding: EdgeInsets.all(20.0),
-              child: SingleChildScrollView(child: _mainPage()),
-            ),
+            SingleChildScrollView(padding: EdgeInsets.all(20), child: _mainPage()),
           ],
         ),
       ),
     );
   }
 
-  Widget _password() {
-    return Column(
-      children: [
-        SizedBox(height: 15),
-        TraXTextField(
-          labelText: 'Password',
-          hintText: 'Password',
-          inPutPassword: true,
-          controller: passwordController,
-        ),
-        SizedBox(height: 15),
-        Row(
-          children: [
-            Expanded(child: SizedBox()),
-            GestureDetector(
-              child: Text(
-                'Forgot Password?',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
-              onTap: () async {
-                await _controller?.pause();
-                await Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => ForgotPasswordPage()),
-                );
-                await _controller?.play();
-              },
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
   Widget _mainPage() {
-    double screenWidth = MediaQuery.of(context).size.width;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(height: 40),
         Text(
           'TRA-X',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 30,
-            fontWeight: FontWeight.w700,
-          ),
+          style: TextStyle(color: Colors.white, fontSize: 30, fontWeight: FontWeight.w700),
         ),
         SizedBox(height: 50),
         Text(
           'Login',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 40,
-            fontWeight: FontWeight.w700,
-          ),
+          style: TextStyle(color: Colors.white, fontSize: 40, fontWeight: FontWeight.w700),
         ),
         SizedBox(height: 40),
-        TraXTextField(
-          labelText: 'Email',
-          hintText: 'jonchan@cycmotor.com',
-          controller: emailController,
-        ),
-        _password(),
-        SizedBox(height: 30),
-        TraxButton(
-          borderRadius: Global.traXborderRadius,
-          minimumSize: Size(screenWidth, 51),
-          backgroundColor: isEmail?
-            WidgetStateProperty.all<Color?>(Colors.white):
-            WidgetStateProperty.all<Color?>(Color(0xFFC0C0C0)),
-          onPressed: () async {
-            if(!isEmail){
-              return;
-            }
-            context.loaderOverlay.show();
-            AppResponse response = await loginWithPasswd(
-              username: emailController.text,
-              password: passwordController.text);
-            messageTopDialog(context,response.message,response.flag);
-            if(response.flag){
-              setState(() {
-                passwordController.text = '';
-              });
-              context.loaderOverlay.hide();
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => VerificationPage(email: emailController.text)),
-              );
-            }
-            context.loaderOverlay.hide();
-          },
-          child: Text(
-            'Log in',
-            style: TextStyle(
-              color: Colors.black,
-              fontSize: 24.0,
-              fontWeight: FontWeight.w700,
-            ),
+        Form(
+          key: controller.formKey,
+          child: Column(
+            children: [
+              TraXTextField(
+                labelText: 'Email',
+                hintText: 'jonchan@cycmotor.com',
+                controller: controller.emailController,
+                validator: TraxValidatorUtil.validateEmail,
+              ),
+              const SizedBox(height: 20),
+              TraXTextField(
+                labelText: 'Password',
+                hintText: 'Password',
+                inPutPassword: true,
+                controller: controller.passwordController,
+                validator: TraxValidatorUtil.validatePassword,
+              ),
+            ],
           ),
         ),
-        SizedBox(height: 15),
+
+        SizedBox(height: 8),
         Row(
+          mainAxisAlignment: MainAxisAlignment.end,
           children: [
-            Expanded(child: Divider(color: Color(0xFF5E5E5E), indent: 20)),
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16),
-              child: Text(
-                'OR',
-                style: TextStyle(color: Color(0xFF949494), fontSize: 14),
-              ),
+            TraxButton.text(
+              text: 'Forgot Password?',
+              textStyle: TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
+              onPressed: () => controller.toForgotPwdPage(),
             ),
-            Expanded(child: Divider(color: Color(0xFF5E5E5E), endIndent: 20)),
           ],
         ),
-        SizedBox(height: 10),
-        logoButton(
-          'assets/images/logo googleg 48dp.png',
-          'Continue with Google',
+        SizedBox(height: 30),
+        TraxButton.filled(
+          text: 'Log in',
+          textStyle: TextStyle(fontWeight: FontWeight.bold, color: Colors.black, fontSize: 24),
+          expand: true,
+          backgroundColor: Colors.white,
+          onPressed: () => controller.login(),
         ),
+        SizedBox(height: 15),
+        TraxOrWidget(),
+        SizedBox(height: 16),
+        LoginWithButton(type: LoginButtonType.google, onPressed: () {}),
         SizedBox(height: 10),
-        logoButton('assets/images/Facebook Logo.png', 'Continue with Facebook'),
+        LoginWithButton(type: LoginButtonType.facebook, onPressed: () {}),
         SizedBox(height: 10),
-        logoButton('assets/images/Apple Logo.png', 'Continue with Apple'),
+        LoginWithButton(type: LoginButtonType.apple, onPressed: () {}),
         SizedBox(height: 10),
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -226,57 +114,15 @@ class _SplashPage extends State<ExotekQuadricyclePage> {
               'Don’t have an account?',
               style: TextStyle(color: Color(0xFFCBCBCB), fontSize: 14),
             ),
-            GestureDetector(
-              onTap: () async {
-                await Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => SignUpPage()),
-                );
-                await _controller!.play();
-              },
-              child: Text(
-                'Sign up.',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
+            const SizedBox(width: 5),
+            TraxButton.text(
+              text: 'Sign up.',
+              textStyle: TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
+              onPressed: () => controller.toSignUpPage(),
             ),
           ],
         ),
       ],
     );
   }
-
-  Widget logoButton(String image, String text, {VoidCallback? onPressed}) {
-    return TraxButton(
-      borderRadius: Global.traXborderRadius,
-      minimumSize: const Size(170, 51),
-      backgroundColor: WidgetStateProperty.all<Color?>(Color(0xFF1A1B1C)),
-      onPressed: onPressed,
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.start,
-        children: [
-          SizedBox(width: 15),
-          Image.asset(image, width: 24, height: 24),
-          SizedBox(width: 20),
-          Text(
-            text,
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 16.0,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-Widget buttonDecoration(Widget child, Color color) {
-  return Container(
-    decoration: BoxDecoration(
-      border: Border.all(color: color, width: 2.0),
-      borderRadius: BorderRadius.circular(5.0),
-    ),
-    child: child,
-  );
 }

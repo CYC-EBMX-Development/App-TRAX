@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:tra_x/common/global.dart';
 import 'package:tra_x/common/widgets/trax_button.dart';
 import 'package:tra_x/common/widgets/trax_text_field.dart';
 
@@ -65,10 +64,7 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
   }
 
   Widget _confirmButton(void Function() onConfirm) {
-    return TraxButton(
-      borderRadius: Global.traXborderRadius,
-      minimumSize: const Size(170, 51),
-      backgroundColor: WidgetStateProperty.all<Color?>(Colors.white),
+    return TraxButton.outlined(
       onPressed: onConfirm,
       child: Text(
         'Confirm',
