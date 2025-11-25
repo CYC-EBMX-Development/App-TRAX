@@ -8,6 +8,7 @@ import 'package:tra_x/features/login/login_page.dart';
 import 'package:tra_x/features/login/login_page_controller.dart';
 import 'package:tra_x/features/login/reset_pwd_page.dart';
 import 'package:tra_x/features/login/verification_page.dart';
+import 'package:tra_x/features/login/web_view_page.dart';
 import 'package:tra_x/features/login/welcome_page.dart';
 
 class TraxRouter {
@@ -42,6 +43,7 @@ class TraxRouter {
       // binding: CreatePwdPageBinding(),
     ),
     GetPage(name: _resetPwdPage, page: () => const ResetPwdPage()),
+    GetPage(name: _webViewPage, page: () => const WebViewPage(), binding: WebViewPageBinding()),
   ];
 
   // 以后再改
@@ -92,4 +94,10 @@ class TraxRouter {
 
   // to reset password page
   static Future<void> toResetPwdPage() async => TraxNaviUtil.pushNamed(_resetPwdPage);
+
+  // webView page
+  static const String _webViewPage = '/web_view';
+
+  static Future<void> toWebViewPage(String title, String url) async =>
+      TraxNaviUtil.pushNamed(_webViewPage, parameters: {'title': title, 'url': url});
 }

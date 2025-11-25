@@ -1,26 +1,52 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:tra_x/common/network/trax_api.dart';
 import 'package:tra_x/common/widgets/trax_button.dart';
+import 'package:tra_x/routers/trax_router.dart';
 
 enum LoginButtonType {
-  google(title: 'Continue with Google', icon: 'assets/svg/google_logo.svg'),
-  facebook(title: 'Continue with Facebook', icon: 'assets/svg/facebook_logo.svg'),
-  apple(title: 'Continue with Apple', icon: 'assets/svg/apple_logo.svg');
+  google(
+    title: 'Continue with Google',
+    icon: 'assets/svg/google_logo.svg',
+    label: 'Google',
+    url: TraxUrl.loginWithGoogle,
+  ),
+  facebook(
+    title: 'Continue with Facebook',
+    icon: 'assets/svg/facebook_logo.svg',
+    label: 'Facebook',
+    url: TraxUrl.loginWithFacebook,
+  ),
+  apple(
+    title: 'Continue with Apple',
+    icon: 'assets/svg/apple_logo.svg',
+    label: 'Apple',
+    url: TraxUrl.loginWithApple,
+  );
 
   final String title;
 
   final String icon;
 
-  const LoginButtonType({required this.title, required this.icon});
+  final String label;
+
+  final String url;
+
+  const LoginButtonType({
+    required this.title,
+    required this.icon,
+    required this.label,
+    required this.url,
+  });
 }
 
 // Login with Google, Facebook, Apple ...
 class LoginWithButton extends StatelessWidget {
-  const LoginWithButton({super.key, required this.type, required this.onPressed});
+  const LoginWithButton({super.key, required this.type, this.onPressed});
 
   final LoginButtonType type;
 
-  final void Function() onPressed;
+  final void Function()? onPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -29,7 +55,9 @@ class LoginWithButton extends StatelessWidget {
       padding: EdgeInsets.symmetric(vertical: 12),
       backgroundColor: Color(0xFF1A1B1C),
       overlayColor: Colors.black45,
-      onPressed: onPressed,
+      onPressed: onPressed ?? () {
+        TraxRouter.toWebViewPage(type.label, TraxApi.getWebLoginUrl(type.url));
+      },
       child: Row(
         mainAxisAlignment: MainAxisAlignment.start,
         children: [

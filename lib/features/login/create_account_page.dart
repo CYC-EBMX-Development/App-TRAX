@@ -99,11 +99,9 @@ class CreateAccountPage extends GetView<CreateAccountController> {
             // title
             Text('Create an Account', style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold)),
             const SizedBox(height: 50),
-            // google login
-            LoginWithButton(type: LoginButtonType.google, onPressed: () {}),
+            LoginWithButton(type: LoginButtonType.google),
             SizedBox(height: 10),
-            // facebook login
-            LoginWithButton(type: LoginButtonType.google, onPressed: () {}),
+            LoginWithButton(type: LoginButtonType.facebook),
             Padding(padding: const EdgeInsets.symmetric(vertical: 40), child: TraxOrWidget()),
             // input
             Form(

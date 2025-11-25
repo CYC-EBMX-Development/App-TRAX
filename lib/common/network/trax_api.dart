@@ -8,11 +8,17 @@ import 'app_response.dart';
 class TraxUrl {
   TraxUrl._();
 
-  static const String baseUrl = 'https://www.cycdeveloper.com/api/';
-  static const String loginWithPasswd = '/auth/loginByPwd';
-  static const String sendCode = '/auth/send-code';
-  static const String verifyCode = '/auth/verify-code';
-  static const String registerByPwd = '/auth/registerByPwd';
+  static const String baseUrlRelease = 'https://www.cycdeveloper.com';
+  static const String baseUrlDebug = 'http://192.168.10.65:18089';
+  static const String baseUrlDebugNoPort = 'http://192.168.10.65';
+  static const String loginWithPasswd = '/api/auth/loginByPwd';
+  static const String sendCode = '/api/auth/send-code';
+  static const String verifyCode = '/api/auth/verify-code';
+  static const String registerByPwd = '/api/auth/registerByPwd';
+  static const String loginWithGoogle = '/oauth2/authorization/google';
+  static const String loginWithFacebook = '/oauth2/authorization/facebook';
+  static const String loginWithApple = '/oauth2/authorization/apple';
+  static const String loginWithGithub = '/oauth2/authorization/github';
 }
 
 class _TraxContentType {
@@ -25,10 +31,13 @@ class TraxApi {
 
   static late Dio _dio;
 
-  static void init() {
+  static late bool _isDebug;
+
+  static void init({required bool isDebug}) {
+    _isDebug = isDebug;
     _dio = Dio(
       BaseOptions(
-        baseUrl: TraxUrl.baseUrl,
+        baseUrl: isDebug ? TraxUrl.baseUrlDebug : TraxUrl.baseUrlRelease,
         connectTimeout: Duration(seconds: 5),
         receiveTimeout: Duration(seconds: 3),
         headers: {'Content-Type': _TraxContentType.form},
@@ -105,5 +114,14 @@ class TraxApi {
         'verificationCode': verificationCode,
       },
     );
+  }
+
+  /// 第三方登录的 url
+  static String getWebLoginUrl(String path) {
+    if (_isDebug) {
+      // 如果是测试环境，则统一使用GitHub作为测试登录
+      return '${TraxUrl.baseUrlDebugNoPort}${TraxUrl.loginWithGithub}';
+    }
+    return '${TraxUrl.baseUrlRelease}$path';
   }
 }

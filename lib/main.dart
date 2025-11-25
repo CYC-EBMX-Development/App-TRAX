@@ -13,10 +13,12 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   // set status bar to white
-  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
-    statusBarIconBrightness: Brightness.light,
-  ));
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.light,
+    ),
+  );
 
   runApp(const MyApp());
 }
@@ -39,6 +41,11 @@ class MyApp extends StatelessWidget {
           onPrimary: Colors.white, // 主色上的文字颜色
           onSurface: Colors.white, // 表面上的文字颜色
         ),
+        appBarTheme: const AppBarTheme(
+          elevation: 0,
+          centerTitle: true,
+          foregroundColor: Colors.black,
+        ),
       ),
       // 滑动效果和iOS相同
       scrollBehavior: const CupertinoScrollBehavior(),
@@ -50,7 +57,7 @@ class MyApp extends StatelessWidget {
           // 初始化屏幕适配
           TraxScreenUtil.init(context);
           // 初始化网络配置
-          TraxApi.init();
+          TraxApi.init(isDebug: true);
           return child!;
         },
       ),
