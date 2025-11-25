@@ -54,7 +54,15 @@ class LoginPageController extends GetxController {
     TraxDialog.messageTopDialog(response.message, response.flag);
   }
 
-  void toForgotPwdPage() => TraxRouter.toForgotPwdPage();
+  void toForgotPwdPage() async {
+    await videoPlayerController?.pause();
+    await TraxRouter.toForgotPwdPage();
+    await videoPlayerController?.play();
+  }
 
-  void toSignUpPage() => TraxRouter.toCreateAccountPage();
+  void toCreateAccountPage()  async {
+    await videoPlayerController?.pause();
+    await TraxRouter.toCreateAccountPage();
+    await videoPlayerController?.play();
+  }
 }

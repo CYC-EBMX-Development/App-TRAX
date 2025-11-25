@@ -118,7 +118,7 @@ class LoginPage extends GetView<LoginPageController> {
             TraxButton.text(
               text: 'Sign up.',
               textStyle: TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
-              onPressed: () => controller.toSignUpPage(),
+              onPressed: () => controller.toCreateAccountPage(),
             ),
           ],
         ),

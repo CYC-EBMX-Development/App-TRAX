@@ -46,6 +46,11 @@ class MyApp extends StatelessWidget {
           centerTitle: true,
           foregroundColor: Colors.black,
         ),
+        textSelectionTheme: const TextSelectionThemeData(
+          cursorColor: Colors.white, // 输入框光标颜色
+          selectionColor: Colors.white24, // 选中文本的背景色
+          selectionHandleColor: Colors.white, // 选中文本的处理手柄颜色
+        ),
       ),
       // 滑动效果和iOS相同
       scrollBehavior: const CupertinoScrollBehavior(),
@@ -57,7 +62,7 @@ class MyApp extends StatelessWidget {
           // 初始化屏幕适配
           TraxScreenUtil.init(context);
           // 初始化网络配置
-          TraxApi.init(isDebug: true);
+          TraxApi.init(isDebug: false);
           return child!;
         },
       ),

@@ -1,18 +1,39 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
+import 'package:get/get.dart';
+import 'package:tra_x/common/utils/trax_validator_util.dart';
 import 'package:tra_x/common/widgets/trax_button.dart';
+import 'package:tra_x/common/widgets/trax_dialog.dart';
+import 'package:tra_x/common/widgets/trax_text.dart';
 import 'package:tra_x/common/widgets/trax_text_field.dart';
 
-class ResetPwdPage extends StatefulWidget {
-  const ResetPwdPage({super.key});
-
+class ResetPwdPageBinding extends Bindings {
   @override
-  State<ResetPwdPage> createState() => _ResetPwdPageState();
+  void dependencies() {
+    Get.put(ResetPwdController());
+  }
 }
 
-class _ResetPwdPageState extends State<ResetPwdPage> {
+class ResetPwdController extends GetxController {
   final TextEditingController _newPwdController = TextEditingController();
   final TextEditingController _confirmPwdController = TextEditingController();
+
+  final formKey = GlobalKey<FormState>();
+
+  void resetPwd() async {
+    if (!formKey.currentState!.validate()) {
+      return;
+    }
+    if (_newPwdController.text != _confirmPwdController.text) {
+      TraxDialog.messageTopDialog('Passwords do not match', false);
+      return;
+    }
+    // TODO: reset password
+    TraxDialog.messageTopDialog('Password reset successful', true);
+  }
+}
+
+class ResetPwdPage extends GetView<ResetPwdController> {
+  const ResetPwdPage({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -21,57 +42,52 @@ class _ResetPwdPageState extends State<ResetPwdPage> {
         child: SingleChildScrollView(
           padding: EdgeInsets.all(24),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  GestureDetector(
-                    onTap: () => Navigator.of(context).pop(),
-                    child: SvgPicture.asset(
-                      'assets/images/back_sign_up.svg',
-                      width: 35,
-                      height: 35,
-                    ),
-                  ),
-                ],
-              ),
+              TraxReturnButton(),
               const SizedBox(height: 40),
-              const Text(
-                "Forgot Password",
+              const TraxText(
+                'Reset Password',
                 style: TextStyle(fontSize: 35, fontWeight: FontWeight.bold),
               ),
-              SizedBox(height: 60),
-              TraXTextField(
-                labelText: 'Password',
-                hintText: 'Password',
-                inPutPassword: true,
-                controller: _newPwdController,
+              const SizedBox(height: 60),
+              Form(
+                key: controller.formKey,
+                child: Column(
+                  children: [
+                    TraXTextField(
+                      labelText: 'New Password',
+                      hintText: '',
+                      inPutPassword: true,
+                      validator: TraxValidatorUtil.validatePassword,
+                      controller: controller._newPwdController,
+                    ),
+                    const SizedBox(height: 20),
+                    TraXTextField(
+                      labelText: 'Confirm Password',
+                      hintText: '',
+                      inPutPassword: true,
+                      validator: TraxValidatorUtil.validatePassword,
+                      controller: controller._confirmPwdController,
+                    ),
+                  ],
+                ),
               ),
-              SizedBox(height: 20),
-              TraXTextField(
-                labelText: 'Password',
-                hintText: 'Password',
-                inPutPassword: true,
-                controller: _confirmPwdController,
+
+              const SizedBox(height: 40),
+              TraxButton.filled(
+                text: 'Confirm',
+                backgroundColor: Colors.white,
+                textStyle: TextStyle(
+                  color: Colors.black,
+                  fontSize: 24.0,
+                  fontWeight: FontWeight.w700,
+                ),
+                expand: true,
+                onPressed: () => controller.resetPwd(),
               ),
-              SizedBox(height: 40),
-              _confirmButton(() {}),
             ],
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _confirmButton(void Function() onConfirm) {
-    return TraxButton.outlined(
-      onPressed: onConfirm,
-      child: Text(
-        'Confirm',
-        style: TextStyle(
-          color: Colors.black,
-          fontSize: 24.0,
-          fontWeight: FontWeight.w700,
         ),
       ),
     );

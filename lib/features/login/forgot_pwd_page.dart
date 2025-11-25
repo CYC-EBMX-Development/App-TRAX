@@ -21,6 +21,12 @@ class ForgotPwdPageController extends GetxController {
   final formKey = GlobalKey<FormState>();
 
   @override
+  void onInit() {
+    emailController.text = '18673298768@163.com';
+    super.onInit();
+  }
+
+  @override
   void onClose() {
     emailController.dispose();
     super.onClose();
@@ -46,16 +52,9 @@ class ForgotPwdPage extends GetView<ForgotPwdPageController> {
         child: SingleChildScrollView(
           padding: EdgeInsets.all(24),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  GestureDetector(
-                    onTap: () => Navigator.of(context).pop(),
-                    child: SvgPicture.asset('assets/svg/return.svg', width: 35, height: 35),
-                  ),
-                ],
-              ),
+              TraxReturnButton(),
               const SizedBox(height: 40),
               const Text(
                 "Forgot Password",
@@ -94,6 +93,7 @@ class ForgotPwdPage extends GetView<ForgotPwdPageController> {
       text: 'Send',
       backgroundColor: Colors.white,
       textStyle: TextStyle(color: Colors.black, fontSize: 24.0, fontWeight: FontWeight.w700),
+      expand: true,
       onPressed: onSend,
     );
   }

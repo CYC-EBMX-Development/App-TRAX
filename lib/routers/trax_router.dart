@@ -42,7 +42,7 @@ class TraxRouter {
       page: () => VerificationPage(),
       // binding: CreatePwdPageBinding(),
     ),
-    GetPage(name: _resetPwdPage, page: () => const ResetPwdPage()),
+    GetPage(name: _resetPwdPage, page: () => const ResetPwdPage(), binding: ResetPwdPageBinding()),
     GetPage(name: _webViewPage, page: () => const WebViewPage(), binding: WebViewPageBinding()),
   ];
 
