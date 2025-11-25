@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
+import 'package:get/get.dart';
 
 class TraxDialog {
   TraxDialog._();
@@ -12,8 +13,8 @@ class TraxDialog {
     SmartDialog.dismiss(status: SmartStatus.loading);
   }
 
-  static void messageTopDialog(BuildContext context, String message, bool flag) {
-    OverlayState? overlayState = Overlay.of(context);
+  static void messageTopDialog(String message, bool flag) {
+    OverlayState? overlayState = Overlay.of(Get.context!);
     OverlayEntry overlayEntry = OverlayEntry(
       builder: (context) => Positioned(
         top: MediaQuery.of(context).padding.top + 10,

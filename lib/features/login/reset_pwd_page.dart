@@ -3,14 +3,14 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:tra_x/common/widgets/trax_button.dart';
 import 'package:tra_x/common/widgets/trax_text_field.dart';
 
-class ResetPasswordPage extends StatefulWidget {
-  const ResetPasswordPage({super.key});
+class ResetPwdPage extends StatefulWidget {
+  const ResetPwdPage({super.key});
 
   @override
-  State<ResetPasswordPage> createState() => _ResetPasswordPageState();
+  State<ResetPwdPage> createState() => _ResetPwdPageState();
 }
 
-class _ResetPasswordPageState extends State<ResetPasswordPage> {
+class _ResetPwdPageState extends State<ResetPwdPage> {
   final TextEditingController _newPwdController = TextEditingController();
   final TextEditingController _confirmPwdController = TextEditingController();
 

@@ -1,23 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
-import 'package:tra_x/common/utils/trax_navigation_util.dart';
 import 'package:tra_x/common/utils/trax_validator_util.dart';
 import 'package:tra_x/common/widgets/trax_button.dart';
 import 'package:tra_x/common/widgets/trax_text_field.dart';
-import 'package:tra_x/features/login/reset_password_page.dart';
-import 'package:tra_x/features/login/verification_page.dart';
+import 'package:tra_x/routers/trax_router.dart';
 
 // Get binding class
-class ForgotPasswordPageBinding extends Bindings {
+class ForgotPwdPageBinding extends Bindings {
   @override
   void dependencies() {
-    Get.put(ForgotPasswordPageController());
+    Get.put(ForgotPwdPageController());
   }
 }
 
 // Get controller class
-class ForgotPasswordPageController extends GetxController {
+class ForgotPwdPageController extends GetxController {
   final TextEditingController emailController = TextEditingController();
 
   final formKey = GlobalKey<FormState>();
@@ -32,19 +30,14 @@ class ForgotPasswordPageController extends GetxController {
     if (!formKey.currentState!.validate()) {
       return;
     }
-    TraxNaviUtil.push(
-      VerificationPage(
-        email: emailController.text,
-        onNext: () {
-          TraxNaviUtil.push(ResetPasswordPage());
-        },
-      ),
-    );
+    TraxRouter.toVerificationPage(emailController.text, (String code) {
+      TraxRouter.toResetPwdPage();
+    });
   }
 }
 
-class ForgotPasswordPage extends GetView<ForgotPasswordPageController> {
-  const ForgotPasswordPage({super.key});
+class ForgotPwdPage extends GetView<ForgotPwdPageController> {
+  const ForgotPwdPage({super.key});
 
   @override
   Widget build(BuildContext context) {

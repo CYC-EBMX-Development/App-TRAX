@@ -1,23 +1,18 @@
-import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
-import 'package:tra_x/common/widgets/trax_button.dart';
-import 'package:pinput/pinput.dart';
 import 'dart:async';
 
-import '../../common/network/trax_api.dart';
-import '../../common/network/app_response.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+import 'package:get/get.dart';
+import 'package:pinput/pinput.dart';
+import 'package:tra_x/common/widgets/trax_button.dart';
+
 import '../../common/global.dart';
+import '../../common/network/app_response.dart';
+import '../../common/network/trax_api.dart';
 import '../../common/widgets/trax_dialog.dart';
 
 class VerificationPage extends StatefulWidget {
-  const VerificationPage({super.key, required this.email, this.onNext});
-
-  final String email;
-
-  /// 跳转的回调
-  ///
-  /// 如果校验成功，则跳转到下一个页面
-  final void Function()? onNext;
+  const VerificationPage({super.key});
 
   @override
   State<VerificationPage> createState() => _VerificationState();
@@ -26,14 +21,22 @@ class VerificationPage extends StatefulWidget {
 class _VerificationState extends State<VerificationPage> {
   final TextEditingController _pinController = TextEditingController();
   final FocusNode _pinFocusNode = FocusNode();
-  String message = '';
   Timer? _timer;
   int _seconds = 0;
   bool _hasError = false;
 
+  late final String _email;
+
+  /// 跳转的回调
+  ///
+  /// 如果校验成功，则跳转到下一个页面
+  late final void Function(String code) _onNext;
+
   @override
   void initState() {
     super.initState();
+    _email = Get.parameters['email'] ?? '';
+    _onNext = Get.arguments;
     _pinFocusNode.addListener(() {
       if (_pinFocusNode.hasFocus) {
         setState(() {
@@ -45,8 +48,8 @@ class _VerificationState extends State<VerificationPage> {
   }
 
   Future<void> _sendCode() async {
-    AppResponse response = await TraxApi.sendCode(email: widget.email);
-    TraxDialog.messageTopDialog(context, response.message, response.flag);
+    AppResponse response = await TraxApi.sendCode(email: _email);
+    TraxDialog.messageTopDialog(response.message, response.flag);
   }
 
   void _startTimer() {
@@ -60,17 +63,9 @@ class _VerificationState extends State<VerificationPage> {
     });
   }
 
-  /// 输入完成
+  /// 输入完成直接回调
   Future<void> _onInputComplete(String code) async {
-    AppResponse response = await TraxApi.verifyCode(email: widget.email, code: code);
-    TraxDialog.messageTopDialog(context, response.message, response.flag);
-    if (!response.flag) {
-      _pinController.text = '';
-      _pinFocusNode.unfocus();
-      setState(() {
-        _hasError = true;
-      });
-    }
+    _onNext(code);
   }
 
   @override
@@ -85,7 +80,6 @@ class _VerificationState extends State<VerificationPage> {
   }
 
   Widget _mainPage() {
-    double height = MediaQuery.of(context).size.height;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -107,7 +101,7 @@ class _VerificationState extends State<VerificationPage> {
           style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Color(0xffDADADA)),
         ),
         Text(
-          widget.email,
+          _email,
           style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.white),
         ),
         SizedBox(height: 30),
@@ -134,10 +128,7 @@ class _VerificationState extends State<VerificationPage> {
               borderRadius: BorderRadius.circular(10),
             ),
           ),
-          onCompleted: (pin) {
-            print('验证码输入完成: $pin');
-            _onInputComplete(pin);
-          },
+          onCompleted: _onInputComplete,
         ),
         SizedBox(height: 25),
         Row(
@@ -166,10 +157,6 @@ class _VerificationState extends State<VerificationPage> {
           ],
         ),
         SizedBox(height: 15),
-        SizedBox(
-          height: height / 3,
-          child: Text(message, style: TextStyle(color: Colors.red)),
-        ),
         Text(
           'Open email app',
           style: TextStyle(

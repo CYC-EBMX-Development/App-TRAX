@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/svg.dart';
 import 'package:tra_x/common/utils/trax_debouncer.dart';
+import 'package:tra_x/common/utils/trax_navigation_util.dart';
 
 /// 按钮组件
 ///
@@ -47,7 +49,9 @@ class TraxButton extends StatelessWidget {
       style: ButtonStyle(
         backgroundColor: const WidgetStatePropertyAll(Colors.transparent),
         padding: WidgetStatePropertyAll(padding),
-        shape: WidgetStatePropertyAll(RoundedRectangleBorder(borderRadius: BorderRadius.circular(borderRadius))),
+        shape: WidgetStatePropertyAll(
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(borderRadius)),
+        ),
         minimumSize: const WidgetStatePropertyAll(Size.zero),
         overlayColor: WidgetStatePropertyAll(overlayColor), // 触摸时的背景色
       ),
@@ -118,7 +122,11 @@ class TraxButton extends StatelessWidget {
         shape: WidgetStatePropertyAll(
           RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(borderRadius),
-            side: BorderSide(color: borderColor, strokeAlign: BorderSide.strokeAlignInside, width: borderWidth),
+            side: BorderSide(
+              color: borderColor,
+              strokeAlign: BorderSide.strokeAlignInside,
+              width: borderWidth,
+            ),
           ),
         ),
       ),
@@ -132,7 +140,11 @@ class TraxButton extends StatelessWidget {
     return TextButton(
       onPressed: onPressed == null
           ? null // 默认500ms内只响应一次
-          : () => TraxThrottle.throttle(onPressed.hashCode.toString(), const Duration(milliseconds: 500), onPressed!),
+          : () => TraxThrottle.throttle(
+              onPressed.hashCode.toString(),
+              const Duration(milliseconds: 500),
+              onPressed!,
+            ),
       style: style,
       child: _child(),
     );
@@ -146,10 +158,31 @@ class TraxButton extends StatelessWidget {
         child: Center(child: child),
       );
     }
-    return expand
-        ? Row(children: [
-      Expanded(child: child),
-    ])
-        : child;
+    return expand ? Row(children: [Expanded(child: child)]) : child;
+  }
+}
+
+class TraxReturnButton extends StatelessWidget {
+  const TraxReturnButton({super.key, this.onPressed});
+
+  final void Function()? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return TraxButton(
+      onPressed: () {
+        if (onPressed != null) {
+          onPressed!();
+        } else {
+          TraxNaviUtil.pop();
+        }
+      },
+      style: const ButtonStyle(
+        padding: WidgetStatePropertyAll(EdgeInsets.zero),
+        overlayColor: WidgetStatePropertyAll(Colors.transparent),
+        minimumSize: WidgetStatePropertyAll(Size.zero),
+      ),
+      child: SvgPicture.asset('assets/svg/return.svg', width: 35, height: 35),
+    );
   }
 }

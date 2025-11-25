@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:tra_x/common/network/app_response.dart';
 import 'package:tra_x/common/network/trax_api.dart';
-import 'package:tra_x/common/utils/trax_navigation_util.dart';
 import 'package:tra_x/common/widgets/trax_dialog.dart';
 import 'package:tra_x/routers/trax_router.dart';
 import 'package:video_player/video_player.dart';
@@ -20,7 +19,6 @@ class LoginPageController extends GetxController {
   VideoPlayerController? videoPlayerController;
   TextEditingController emailController = TextEditingController();
   TextEditingController passwordController = TextEditingController();
-  bool isEmail = false;
 
   final videoPlayerInit = false.obs;
 
@@ -49,20 +47,14 @@ class LoginPageController extends GetxController {
     if (!formKey.currentState!.validate()) {
       return;
     }
-    TraxDialog.showLoading();
     AppResponse response = await TraxApi.loginWithPasswd(
       username: emailController.text,
       password: passwordController.text,
     );
-    TraxDialog.hideLoading();
-    TraxDialog.messageTopDialog(Get.context!, response.message, response.flag);
+    TraxDialog.messageTopDialog(response.message, response.flag);
   }
 
-  void toForgotPwdPage() {
-    TraxNaviUtil.pushNamed(TraxRouter.forgotPwdPage);
-  }
+  void toForgotPwdPage() => TraxRouter.toForgotPwdPage();
 
-  void toSignUpPage() {
-    TraxNaviUtil.pushNamed(TraxRouter.signUpPage);
-  }
+  void toSignUpPage() => TraxRouter.toCreateAccountPage();
 }

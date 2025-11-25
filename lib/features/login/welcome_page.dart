@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:tra_x/common/utils/trax_navigation_util.dart';
 import 'package:tra_x/common/widgets/trax_button.dart';
 import 'package:tra_x/common/widgets/trax_text.dart';
 import 'package:tra_x/routers/trax_router.dart';
@@ -55,9 +54,7 @@ class WelcomePage extends StatelessWidget {
             text: 'Log in',
             textStyle: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
             borderColor: Colors.white,
-            onPressed: () {
-              TraxNaviUtil.pushNamed(TraxRouter.loginPage);
-            },
+            onPressed: () => TraxRouter.toLoginPage(),
           ),
         ),
       ],

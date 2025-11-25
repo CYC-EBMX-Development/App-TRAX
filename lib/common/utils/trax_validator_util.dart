@@ -24,7 +24,7 @@ class TraxValidatorUtil {
     if (value == null || value.isEmpty) {
       return 'Please enter password';
     }
-    if (value.length < 6) {
+    if (value.length < 8) {
       return 'Password enter valid password';
     }
     return null;

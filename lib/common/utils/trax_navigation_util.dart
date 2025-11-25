@@ -7,7 +7,8 @@ class TraxNaviUtil {
 
   static Future<T?>? push<T>(Widget page) => Get.to<T>(() => page);
 
-  static Future<T?>? pushNamed<T>(String routeName) => Get.toNamed(routeName);
+  static Future<T?>? pushNamed<T>(String routeName, {dynamic arg,Map<String, String>? parameters}) =>
+      Get.toNamed(routeName, arguments: arg, parameters: parameters);
 
   static Future<T?>? pushAndRemoveAll<T>(String newRouteName) => Get.offAllNamed(newRouteName);
 

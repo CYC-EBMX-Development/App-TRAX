@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:tra_x/common/utils/trax_log_util.dart';
 
 class TraXTextField extends StatefulWidget {
   const TraXTextField({
@@ -74,7 +73,7 @@ class _TraXTextFieldPage extends State<TraXTextField> {
             : null,
       ),
       onChanged: (value) {
-        TraxLogUtil.debug('输入的内容: $value');
+        // TraxLogUtil.debug('输入的内容: $value');
       },
     );
   }

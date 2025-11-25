@@ -1,9 +1,13 @@
 import 'package:get/get.dart';
 import 'package:tra_x/common/utils/trax_log_util.dart';
-import 'package:tra_x/features/login/forgot_password_page.dart';
+import 'package:tra_x/common/utils/trax_navigation_util.dart';
+import 'package:tra_x/features/login/create_account_page.dart';
+import 'package:tra_x/features/login/create_pwd_page.dart';
+import 'package:tra_x/features/login/forgot_pwd_page.dart';
 import 'package:tra_x/features/login/login_page.dart';
 import 'package:tra_x/features/login/login_page_controller.dart';
-import 'package:tra_x/features/login/sign_up_page.dart';
+import 'package:tra_x/features/login/reset_pwd_page.dart';
+import 'package:tra_x/features/login/verification_page.dart';
 import 'package:tra_x/features/login/welcome_page.dart';
 
 class TraxRouter {
@@ -16,25 +20,76 @@ class TraxRouter {
 
   static final List<GetPage<dynamic>> pages = [
     GetPage(name: welcomePage, page: () => const WelcomePage()),
-    GetPage(name: loginPage, page: () => const LoginPage(), binding: LoginPageBinding()),
+    GetPage(name: _loginPage, page: () => const LoginPage(), binding: LoginPageBinding()),
     GetPage(
-      name: forgotPwdPage,
-      page: () => const ForgotPasswordPage(),
-      binding: ForgotPasswordPageBinding(),
+      name: _forgotPwdPage,
+      page: () => const ForgotPwdPage(),
+      binding: ForgotPwdPageBinding(),
     ),
     GetPage(
-      name: signUpPage,
-      page: () => const SignUpPage(),
-      binding: SignUpPageBinding(),
+      name: _createAccountPage,
+      page: () => const CreateAccountPage(),
+      binding: CreateAccountPageBinding(),
     ),
+    GetPage(
+      name: _createPwdPage,
+      page: () => const CreatePwdPage(),
+      binding: CreatePwdPageBinding(),
+    ),
+    GetPage(
+      name: _verificationPage,
+      page: () => VerificationPage(),
+      // binding: CreatePwdPageBinding(),
+    ),
+    GetPage(name: _resetPwdPage, page: () => const ResetPwdPage()),
   ];
 
+  // 以后再改
   static const String welcomePage = '/welcome';
-  static const String loginPage = '/login';
+
+  static const String _loginPage = '/login';
+
+  static Future<void> toLoginPage() async => TraxNaviUtil.pushNamed(_loginPage);
+
+  static Future<void> toLoginPageOffAll() async => TraxNaviUtil.pushAndRemoveAll(_loginPage);
 
   // forgot password page
-  static const String forgotPwdPage = '/forgot_password';
+  static const String _forgotPwdPage = '/forgot_password';
 
-  // sign up page
-  static const String signUpPage = '/sign_up';
+  static Future<void> toForgotPwdPage() async => TraxNaviUtil.pushNamed(_forgotPwdPage);
+
+  // create account page
+  static const String _createAccountPage = '/create_account';
+
+  static Future<void> toCreateAccountPage() async => TraxNaviUtil.pushNamed(_createAccountPage);
+
+  // create pwd page
+  static const String _createPwdPage = '/create_pwd';
+
+  static Future<void> toCreatePwdPage(String email, String verifyCode) async =>
+      TraxNaviUtil.pushNamed(
+        _createPwdPage,
+        parameters: {'email': email, 'verificationCode': verifyCode},
+      );
+
+  // verification page
+  static const String _verificationPage = '/verification';
+
+  /// to verification page
+  ///
+  /// return true if verification success
+  static Future<bool> toVerificationPage(String email, void Function(String code) onSuccess) async {
+    final result = await TraxNaviUtil.pushNamed(
+      _verificationPage,
+      arg: onSuccess,
+      parameters: {'email': email},
+    );
+    return result == true;
+  }
+
+  // reset password page
+  static const String _resetPwdPage = '/reset_pwd';
+
+  // to reset password page
+  static Future<void> toResetPwdPage() async => TraxNaviUtil.pushNamed(_resetPwdPage);
 }
