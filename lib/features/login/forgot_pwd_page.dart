@@ -20,12 +20,6 @@ class ForgotPwdPageController extends GetxController {
   final formKey = GlobalKey<FormState>();
 
   @override
-  void onInit() {
-    emailController.text = '18673298768@163.com';
-    super.onInit();
-  }
-
-  @override
   void onClose() {
     emailController.dispose();
     super.onClose();

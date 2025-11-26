@@ -28,7 +28,6 @@ class CreateAccountController extends GetxController {
 
   @override
   void onInit() {
-    emailController.text = '18673298768@163.com'; // 测试账号, 暂时不能用
     videoPlayerController = VideoPlayerController.asset('assets/mp4/login.mp4')
       ..initialize().then((_) {
         videoPlayerController!.setLooping(true);
