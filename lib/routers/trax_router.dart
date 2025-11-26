@@ -7,6 +7,7 @@ import 'package:tra_x/features/login/forgot_pwd_page.dart';
 import 'package:tra_x/features/login/login_page.dart';
 import 'package:tra_x/features/login/login_page_controller.dart';
 import 'package:tra_x/features/login/reset_pwd_page.dart';
+import 'package:tra_x/features/login/reset_pwd_success_page.dart';
 import 'package:tra_x/features/login/verification_page.dart';
 import 'package:tra_x/features/login/web_view_page.dart';
 import 'package:tra_x/features/login/welcome_page.dart';
@@ -43,6 +44,11 @@ class TraxRouter {
       // binding: CreatePwdPageBinding(),
     ),
     GetPage(name: _resetPwdPage, page: () => const ResetPwdPage(), binding: ResetPwdPageBinding()),
+    GetPage(
+      name: _resetPwdSuccessPage,
+      page: () => const ResetPwdSuccessPage(),
+      binding: ResetPwdSuccessPageBinding(),
+    ),
     GetPage(name: _webViewPage, page: () => const WebViewPage(), binding: WebViewPageBinding()),
   ];
 
@@ -55,17 +61,14 @@ class TraxRouter {
 
   static Future<void> toLoginPageOffAll() async => TraxNaviUtil.pushAndRemoveAll(_loginPage);
 
-  // forgot password page
   static const String _forgotPwdPage = '/forgot_password';
 
   static Future<void> toForgotPwdPage() async => TraxNaviUtil.pushNamed(_forgotPwdPage);
 
-  // create account page
   static const String _createAccountPage = '/create_account';
 
   static Future<void> toCreateAccountPage() async => TraxNaviUtil.pushNamed(_createAccountPage);
 
-  // create pwd page
   static const String _createPwdPage = '/create_pwd';
 
   static Future<void> toCreatePwdPage(String email, String verifyCode) async =>
@@ -74,30 +77,27 @@ class TraxRouter {
         parameters: {'email': email, 'verificationCode': verifyCode},
       );
 
-  // verification page
   static const String _verificationPage = '/verification';
 
   /// to verification page
-  ///
-  /// return true if verification success
-  static Future<bool> toVerificationPage(String email, void Function(String code) onSuccess) async {
-    final result = await TraxNaviUtil.pushNamed(
-      _verificationPage,
-      arg: onSuccess,
-      parameters: {'email': email},
-    );
-    return result == true;
+  static Future<void> toVerificationPage(String email, void Function(String code) onSuccess) async {
+    await TraxNaviUtil.pushNamed(_verificationPage, arg: onSuccess, parameters: {'email': email});
   }
 
-  // reset password page
   static const String _resetPwdPage = '/reset_pwd';
 
-  // to reset password page
-  static Future<void> toResetPwdPage() async => TraxNaviUtil.pushNamed(_resetPwdPage);
+  static Future<void> toResetPwdPage(String email, String verificationCode) async =>
+      TraxNaviUtil.pushNamed(
+        _resetPwdPage,
+        parameters: {'email': email, 'verificationCode': verificationCode},
+      );
 
-  // webView page
   static const String _webViewPage = '/web_view';
 
   static Future<void> toWebViewPage(String title, String url) async =>
       TraxNaviUtil.pushNamed(_webViewPage, parameters: {'title': title, 'url': url});
+
+  static const String _resetPwdSuccessPage = '/reset_pwd_success';
+
+  static Future<void> toResetPwdSuccessPage() async => TraxNaviUtil.pushNamed(_resetPwdSuccessPage);
 }

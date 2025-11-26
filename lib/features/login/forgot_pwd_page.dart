@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
 import 'package:tra_x/common/utils/trax_validator_util.dart';
 import 'package:tra_x/common/widgets/trax_button.dart';
@@ -37,7 +36,7 @@ class ForgotPwdPageController extends GetxController {
       return;
     }
     TraxRouter.toVerificationPage(emailController.text, (String code) {
-      TraxRouter.toResetPwdPage();
+      TraxRouter.toResetPwdPage(emailController.text, code);
     });
   }
 }

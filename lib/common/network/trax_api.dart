@@ -15,6 +15,7 @@ class TraxUrl {
   static const String sendCode = '/api/auth/send-code';
   static const String verifyCode = '/api/auth/verify-code';
   static const String registerByPwd = '/api/auth/registerByPwd';
+  static const String resetPassword = '/api/auth/reset-password';
   static const String loginWithGoogle = '/oauth2/authorization/google';
   static const String loginWithFacebook = '/oauth2/authorization/facebook';
   static const String loginWithApple = '/oauth2/authorization/apple';
@@ -123,5 +124,22 @@ class TraxApi {
       return '${TraxUrl.baseUrlDebugNoPort}${TraxUrl.loginWithGithub}';
     }
     return '${TraxUrl.baseUrlRelease}$path';
+  }
+
+  /// reset password
+  static Future<AppResponse> resetPassword({
+    required String email,
+    required String password,
+    required String verificationCode,
+  }) {
+    return post(
+      TraxUrl.resetPassword,
+      headers: {'Content-Type': _TraxContentType.json},
+      data: {
+        'email': email,
+        'newPassword': password,
+        'verificationCode': verificationCode,
+      },
+    );
   }
 }

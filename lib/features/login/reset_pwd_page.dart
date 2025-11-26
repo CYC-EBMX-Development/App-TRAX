@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:tra_x/common/network/trax_api.dart';
 import 'package:tra_x/common/utils/trax_validator_util.dart';
 import 'package:tra_x/common/widgets/trax_button.dart';
 import 'package:tra_x/common/widgets/trax_dialog.dart';
 import 'package:tra_x/common/widgets/trax_text.dart';
 import 'package:tra_x/common/widgets/trax_text_field.dart';
+import 'package:tra_x/routers/trax_router.dart';
 
 class ResetPwdPageBinding extends Bindings {
   @override
@@ -14,21 +16,40 @@ class ResetPwdPageBinding extends Bindings {
 }
 
 class ResetPwdController extends GetxController {
-  final TextEditingController _newPwdController = TextEditingController();
-  final TextEditingController _confirmPwdController = TextEditingController();
+  final TextEditingController newPwdController = TextEditingController();
+  final TextEditingController confirmPwdController = TextEditingController();
 
   final formKey = GlobalKey<FormState>();
+
+  late final String email;
+
+  late final String verificationCode;
+
+  @override
+  void onInit() {
+    email = Get.parameters['email'] ?? '';
+    verificationCode = Get.parameters['verificationCode'] ?? '';
+    super.onInit();
+  }
 
   void resetPwd() async {
     if (!formKey.currentState!.validate()) {
       return;
     }
-    if (_newPwdController.text != _confirmPwdController.text) {
+    if (newPwdController.text != confirmPwdController.text) {
       TraxDialog.messageTopDialog('Passwords do not match', false);
       return;
     }
-    // TODO: reset password
-    TraxDialog.messageTopDialog('Password reset successful', true);
+    final response = await TraxApi.resetPassword(
+      email: email,
+      password: newPwdController.text,
+      verificationCode: verificationCode,
+    );
+    if (!response.flag) {
+      TraxDialog.messageTopDialog(response.message, response.flag);
+      return;
+    }
+    await TraxRouter.toResetPwdSuccessPage();
   }
 }
 
@@ -60,7 +81,7 @@ class ResetPwdPage extends GetView<ResetPwdController> {
                       hintText: '',
                       inPutPassword: true,
                       validator: TraxValidatorUtil.validatePassword,
-                      controller: controller._newPwdController,
+                      controller: controller.newPwdController,
                     ),
                     const SizedBox(height: 20),
                     TraXTextField(
@@ -68,7 +89,7 @@ class ResetPwdPage extends GetView<ResetPwdController> {
                       hintText: '',
                       inPutPassword: true,
                       validator: TraxValidatorUtil.validatePassword,
-                      controller: controller._confirmPwdController,
+                      controller: controller.confirmPwdController,
                     ),
                   ],
                 ),
