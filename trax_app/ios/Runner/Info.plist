@@ -28,6 +28,14 @@
 	<true/>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>TRAX needs your location to track your ride route.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>TRAX continues to record your trail and ride in the background so the GPS track stays complete when the screen is locked.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>TRAX continues to record your trail and ride in the background so the GPS track stays complete when the screen is locked.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>TRAX needs camera access so you can take a new profile photo.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
@@ -28,7 +29,21 @@ class ActiveRideService extends ChangeNotifier {
   int? _trailId;
   String? _trailName;
   int? _targetLaps;
+  // Optional anchor points (start / end) used to drive the adaptive
+  // 1 s / 0.1 s GPS sampling near lap boundaries.
+  LatLng? _anchorStart;
+  LatLng? _anchorEnd;
 
+  // ── Adaptive sampling state ─────────────────────────
+  static const int _kBaseIntervalMs = 1000;
+  static const int _kFastIntervalMs = 100;
+  static const double _kFastSampleRadiusM = 10.0;
+  int _currentIntervalMs = _kBaseIntervalMs;
+  Timer? _samplingPollTimer;  // Last observed distance to each anchor (metres). Used to detect whether
+  // the rider is *approaching* the anchor (distance shrinking) so the
+  // 100 ms cadence only kicks in on the way IN — not while leaving.
+  double? _lastDistToStartM;
+  double? _lastDistToEndM;
   // Timers
   Timer? _statsTimer;
   Timer? _telemetryTimer;
@@ -142,28 +157,137 @@ class ActiveRideService extends ChangeNotifier {
   }
 
   void _startPhoneGps() {
+    _currentIntervalMs = _kBaseIntervalMs;
     _geoSub = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 5,
-      ),
-    ).listen((pos) {
-      final latlng = LatLng(pos.latitude, pos.longitude);
-      _pendingPoints.add(RidePoint(
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-        speed: (pos.speed * 3.6).clamp(0, 200),
-        altitude: pos.altitude,
-        timestamp: DateTime.now(),
-      ));
-      currentPos = latlng;
-      route.add(latlng);
-      notifyListeners();
+      locationSettings: _buildLocationSettings(_kBaseIntervalMs),
+    ).listen(_onGpsFix);
+
+    _samplingPollTimer?.cancel();
+    _samplingPollTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_rideStatus != 'active') return;
+      _maybeAdjustSamplingRate(currentPos);
     });
 
     _uploadTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       if (_pendingPoints.isNotEmpty) _uploadPendingPoints();
     });
+  }
+
+  void _onGpsFix(Position pos) {
+    final latlng = LatLng(pos.latitude, pos.longitude);
+    _pendingPoints.add(RidePoint(
+      latitude: pos.latitude,
+      longitude: pos.longitude,
+      speed: (pos.speed * 3.6).clamp(0, 200),
+      altitude: pos.altitude,
+      timestamp: DateTime.now(),
+    ));
+    currentPos = latlng;
+    route.add(latlng);
+    notifyListeners();
+    _maybeAdjustSamplingRate(latlng);
+  }
+
+  /// Configure background-capable location updates for the active ride.
+  /// On Android we pin a foreground-service notification so the OS keeps
+  /// the GPS stream alive when the screen is off; on iOS we enable
+  /// allowBackgroundLocationUpdates which (combined with UIBackgroundModes
+  /// = location in Info.plist) keeps updates flowing while suspended.
+  LocationSettings _buildLocationSettings(int intervalMs) {
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      return AndroidSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 0,
+        intervalDuration: Duration(milliseconds: intervalMs),
+        foregroundNotificationConfig: const ForegroundNotificationConfig(
+          notificationTitle: 'TRAX is tracking your ride',
+          notificationText: 'Recording continues while the screen is off',
+          enableWakeLock: true,
+        ),
+      );
+    }
+    if (defaultTargetPlatform == TargetPlatform.iOS ||
+        defaultTargetPlatform == TargetPlatform.macOS) {
+      return AppleSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 0,
+        allowBackgroundLocationUpdates: true,
+        showBackgroundLocationIndicator: true,
+        pauseLocationUpdatesAutomatically: false,
+        activityType: ActivityType.fitness,
+      );
+    }
+    return const LocationSettings(
+      accuracy: LocationAccuracy.high,
+      distanceFilter: 0,
+    );
+  }
+
+  /// Set the anchor points used for adaptive sampling. For a lap-timer ride
+  /// pass start = end (loop). For a free ride leave both null — sampling
+  /// stays at the 1 s base rate.
+  void setSamplingAnchors({LatLng? start, LatLng? end}) {
+    _anchorStart = start;
+    _anchorEnd = end;
+    _lastDistToStartM = null;
+    _lastDistToEndM = null;
+  }
+
+  void _maybeAdjustSamplingRate(LatLng pos) {
+    if (_rideStatus != 'active') return;
+    if (_anchorStart == null && _anchorEnd == null) return;
+    final dStart = _anchorStart == null
+        ? double.infinity
+        : _haversineMeters(pos, _anchorStart!);
+    final dEnd = _anchorEnd == null
+        ? double.infinity
+        : _haversineMeters(pos, _anchorEnd!);
+
+    // Approaching = inside the radius AND distance shrinking compared to
+    // the previous fix. This guarantees the 100 ms cadence only kicks in
+    // on the way TOWARDS a boundary, not while leaving it.
+    final approachingStart = dStart < _kFastSampleRadiusM &&
+        (_lastDistToStartM == null || dStart < _lastDistToStartM!);
+    final approachingEnd = dEnd < _kFastSampleRadiusM &&
+        (_lastDistToEndM == null || dEnd < _lastDistToEndM!);
+    final leavingStart = _lastDistToStartM != null && dStart > _lastDistToStartM!;
+    final leavingEnd = _lastDistToEndM != null && dEnd > _lastDistToEndM!;
+
+    _lastDistToStartM = dStart;
+    _lastDistToEndM = dEnd;
+
+    int desiredMs;
+    if (approachingStart || approachingEnd) {
+      desiredMs = _kFastIntervalMs;
+    } else if (_currentIntervalMs == _kFastIntervalMs &&
+        (leavingStart || leavingEnd)) {
+      // We were sampling fast and have now crossed / are moving away — go
+      // back to the 1 s base cadence.
+      desiredMs = _kBaseIntervalMs;
+    } else {
+      desiredMs = _currentIntervalMs;
+    }
+    if (desiredMs == _currentIntervalMs) return;
+    _currentIntervalMs = desiredMs;
+    if (_mode != 'without_module') return; // module mode doesn't use phone GPS
+    _geoSub?.cancel();
+    _geoSub = Geolocator.getPositionStream(
+      locationSettings: _buildLocationSettings(desiredMs),
+    ).listen(_onGpsFix);
+  }
+
+  static double _haversineMeters(LatLng a, LatLng b) {
+    const r = 6371000.0;
+    final dLat = (b.latitude - a.latitude) * math.pi / 180;
+    final dLng = (b.longitude - a.longitude) * math.pi / 180;
+    final sLat = math.sin(dLat / 2);
+    final sLng = math.sin(dLng / 2);
+    final h = sLat * sLat +
+        math.cos(a.latitude * math.pi / 180) *
+            math.cos(b.latitude * math.pi / 180) *
+            sLng *
+            sLng;
+    return 2 * r * math.asin(math.sqrt(h));
   }
 
   // ── Pause / Resume / Stop ────────────────────────────────
@@ -325,11 +449,13 @@ class ActiveRideService extends ChangeNotifier {
     _telemetryTimer?.cancel();
     _durationTimer?.cancel();
     _uploadTimer?.cancel();
+    _samplingPollTimer?.cancel();
     _geoSub?.cancel();
     _statsTimer = null;
     _telemetryTimer = null;
     _durationTimer = null;
     _uploadTimer = null;
+    _samplingPollTimer = null;
     _geoSub = null;
   }
 }

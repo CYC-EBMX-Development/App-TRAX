@@ -30,6 +30,7 @@ com/trax/dto/BikeBrandDto.class
 com/trax/controller/BicycleController.class
 com/trax/util/LapDetector.class
 com/trax/controller/AuthController.class
+com/trax/util/StaticMapUrlBuilder.class
 com/trax/model/User.class
 com/trax/model/Bicycle.class
 com/trax/config/DataInitializer.class
@@ -60,6 +61,7 @@ com/trax/repository/RideRecordRepository.class
 com/trax/model/HistoryBicycle.class
 com/trax/dto/RideRecordDto.class
 com/trax/dto/TrailCreateRequest.class
+com/trax/dto/UpdateProfileRequest.class
 com/trax/repository/RideLapCheckpointRepository.class
 com/trax/dto/BikeModelDto.class
 com/trax/service/ProductService.class

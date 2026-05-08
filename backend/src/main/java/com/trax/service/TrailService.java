@@ -158,6 +158,9 @@ public class TrailService {
         trail.setStartLongitude(first.getLongitude());
         trail.setEndLatitude(last.getLatitude());
         trail.setEndLongitude(last.getLongitude());
+        // Generate a Google Static Maps thumbnail URL so trail cards render
+        // a real preview of the route immediately.
+        trail.setImageUrl(com.trax.util.StaticMapUrlBuilder.forTrailPoints(optimized));
         trail = trailRepository.save(trail);
 
         // Save optimized points

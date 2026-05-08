@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../../common/utils/start_end_marker_icons.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import '../../theme/app_theme.dart';
 import 'trail_save_page.dart';
 import 'package:trax_app/common/widgets/page_code_badge.dart';
@@ -72,9 +73,25 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
   static const double _kLapFinishLineHalfWidthKm = 0.015; // ±15 m
   static const double _kHeadingRefMinMeters = 5.0;
 
+  // ── Adaptive GPS sampling ────────────────────────────
+  // Default sampling cadence is 1 s; when the rider is approaching the
+  // start or end point (distance shrinking AND within
+  // [_kFastSampleRadiusM]) we drop to 100 ms to capture the lap boundary
+  // precisely. Once the rider crosses the boundary and the distance
+  // begins to grow again we return to 1 s.
+  static const int _kBaseIntervalMs = 1000;
+  static const int _kFastIntervalMs = 100;
+  static const double _kFastSampleRadiusM = 10.0;
+  Timer? _samplingPollTimer;
+  int _currentIntervalMs = _kBaseIntervalMs;
+  double? _lastDistToStartM;
+  double? _lastDistToEndM;
+
   @override
   void initState() {
     super.initState();
+    // Keep the screen awake throughout the recording session.
+    WakelockPlus.enable();
     _initLocation();
   }
 
@@ -149,8 +166,11 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
     _geoSub?.cancel();
     _durationTimer?.cancel();
     _mockTimer?.cancel();
+    _samplingPollTimer?.cancel();
     _latLngController.dispose();
     _mapController?.dispose();
+    // Release the wake-lock when leaving the page.
+    WakelockPlus.disable();
     super.dispose();
   }
 
@@ -215,11 +235,11 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
       }
     });
 
+    _currentIntervalMs = _kBaseIntervalMs;
+    _lastDistToStartM = null;
+    _lastDistToEndM = null;
     _geoSub = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 5,
-      ),
+      locationSettings: _buildLocationSettings(_kBaseIntervalMs),
     ).listen((pos) {
       final latlng = LatLng(pos.latitude, pos.longitude);
       // Capture the previous sample BEFORE we mutate _points so we can
@@ -236,6 +256,107 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
         ));
       });
       _animateToCurrentPos();
+      _maybeAdjustSamplingRate(latlng);
+      if (_isLapRecordingMode) {
+        _lapModeOnNewPoint(prev, _points.last);
+      }
+    });
+    // Every second re-evaluate the sampling rate even if no fix has come
+    // through (e.g. user is stationary near the start point).
+    _samplingPollTimer?.cancel();
+    _samplingPollTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_status != 'recording') return;
+      _maybeAdjustSamplingRate(_currentPos);
+    });
+  }
+
+  /// Build location settings for the active sampling rate.
+  /// Sets distanceFilter=0 so the OS reports updates on the chosen interval
+  /// regardless of physical movement.
+  LocationSettings _buildLocationSettings(int intervalMs) {
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      return AndroidSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 0,
+        intervalDuration: Duration(milliseconds: intervalMs),
+        foregroundNotificationConfig: const ForegroundNotificationConfig(
+          notificationTitle: 'TRAX is recording your trail',
+          notificationText: 'Recording continues while the screen is off',
+          enableWakeLock: true,
+        ),
+      );
+    }
+    if (defaultTargetPlatform == TargetPlatform.iOS ||
+        defaultTargetPlatform == TargetPlatform.macOS) {
+      return AppleSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 0,
+        allowBackgroundLocationUpdates: true,
+        showBackgroundLocationIndicator: true,
+        pauseLocationUpdatesAutomatically: false,
+        activityType: ActivityType.fitness,
+      );
+    }
+    return LocationSettings(
+      accuracy: LocationAccuracy.high,
+      distanceFilter: 0,
+    );
+  }
+
+  /// Switch between 1 s and 0.1 s sampling depending on proximity to the
+  /// start/end points of the recording. Fast cadence only triggers when
+  /// the rider is *approaching* a boundary (distance shrinking AND inside
+  /// [_kFastSampleRadiusM]); once the rider crosses and starts moving
+  /// away the cadence reverts to the 1 s base rate.
+  void _maybeAdjustSamplingRate(LatLng pos) {
+    if (_status != 'recording' || _points.isEmpty) return;
+    final start = _route.first;
+    final end = _route.last;
+    final dStart = Geolocator.distanceBetween(
+        pos.latitude, pos.longitude, start.latitude, start.longitude);
+    final dEnd = Geolocator.distanceBetween(
+        pos.latitude, pos.longitude, end.latitude, end.longitude);
+
+    final approachingStart = dStart < _kFastSampleRadiusM &&
+        (_lastDistToStartM == null || dStart < _lastDistToStartM!);
+    final approachingEnd = dEnd < _kFastSampleRadiusM &&
+        (_lastDistToEndM == null || dEnd < _lastDistToEndM!);
+    final leavingStart = _lastDistToStartM != null && dStart > _lastDistToStartM!;
+    final leavingEnd = _lastDistToEndM != null && dEnd > _lastDistToEndM!;
+
+    _lastDistToStartM = dStart;
+    _lastDistToEndM = dEnd;
+
+    int desiredMs;
+    if (approachingStart || approachingEnd) {
+      desiredMs = _kFastIntervalMs;
+    } else if (_currentIntervalMs == _kFastIntervalMs &&
+        (leavingStart || leavingEnd)) {
+      desiredMs = _kBaseIntervalMs;
+    } else {
+      desiredMs = _currentIntervalMs;
+    }
+    if (desiredMs == _currentIntervalMs) return;
+    _currentIntervalMs = desiredMs;
+    // Re-subscribe with the new cadence.
+    _geoSub?.cancel();
+    _geoSub = Geolocator.getPositionStream(
+      locationSettings: _buildLocationSettings(desiredMs),
+    ).listen((p) {
+      final ll = LatLng(p.latitude, p.longitude);
+      final prev = _points.isNotEmpty ? _points.last : null;
+      setState(() {
+        _currentPos = ll;
+        _route.add(ll);
+        _points.add(_RecordedPoint(
+          latitude: p.latitude,
+          longitude: p.longitude,
+          altitude: p.altitude,
+          timestamp: DateTime.now(),
+        ));
+      });
+      _animateToCurrentPos();
+      _maybeAdjustSamplingRate(ll);
       if (_isLapRecordingMode) {
         _lapModeOnNewPoint(prev, _points.last);
       }

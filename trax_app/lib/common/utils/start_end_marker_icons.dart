@@ -43,8 +43,10 @@ class StartEndMarkerIcons {
 
   static Future<BitmapDescriptor> _build(
       String text, Color fill, double dpr) async {
-    final r = 18.0 * dpr;
-    final borderW = 3.0 * dpr;
+    // Reduced size to match the smaller pin style requested.
+    // Was 18 / 3 / fontSize 20.
+    final r = 11.0 * dpr;
+    final borderW = 2.0 * dpr;
     final size = (r + borderW) * 2;
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, size, size));
@@ -58,7 +60,7 @@ class StartEndMarkerIcons {
         text: text,
         style: TextStyle(
           color: Colors.white,
-          fontSize: 20 * dpr,
+          fontSize: 13 * dpr,
           fontWeight: FontWeight.w900,
         ),
       ),

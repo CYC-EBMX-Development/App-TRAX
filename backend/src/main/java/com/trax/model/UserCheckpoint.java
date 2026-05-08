@@ -7,7 +7,7 @@ import java.time.LocalDateTime;
 @Table(name = "user_checkpoints",
         uniqueConstraints = @UniqueConstraint(
                 name = "uk_user_trail_seq",
-                columnNames = {"user_id", "trail_id", "sequence_index"}))
+                columnNames = {"user_id", "trail_id", "sequence_index", "deleted_at"}))
 public class UserCheckpoint {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -33,6 +33,16 @@ public class UserCheckpoint {
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
+    /**
+     * Soft-delete timestamp. When non-null this checkpoint is considered
+     * deleted for the purposes of the editor / live ride, but the row
+     * remains in the table so that historical ride records (whose
+     * RideLapCheckpoint passes captured the lat/lng at ride time) keep
+     * referential context.
+     */
+    @Column(name = "deleted_at")
+    private LocalDateTime deletedAt;
+
     @PrePersist
     protected void onCreate() {
         if (createdAt == null) createdAt = LocalDateTime.now();
@@ -52,4 +62,6 @@ public class UserCheckpoint {
     public void setLongitude(Double longitude) { this.longitude = longitude; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+    public LocalDateTime getDeletedAt() { return deletedAt; }
+    public void setDeletedAt(LocalDateTime deletedAt) { this.deletedAt = deletedAt; }
 }

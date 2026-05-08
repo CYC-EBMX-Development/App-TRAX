@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import '../../common/utils/map_gesture_recognizers.dart';
 import '../../common/utils/cp_marker_icons.dart';
 import '../../common/utils/start_end_marker_icons.dart';
@@ -74,6 +75,8 @@ class _LapTimerPageState extends State<LapTimerPage> {
   @override
   void initState() {
     super.initState();
+    // Keep the screen awake throughout the lap session.
+    WakelockPlus.enable();
     _svc.addListener(_onSvcUpdate);
     _loadTrailRoute();
     _loadUserCheckpoints();
@@ -84,6 +87,7 @@ class _LapTimerPageState extends State<LapTimerPage> {
   void dispose() {
     _svc.removeListener(_onSvcUpdate);
     _mapController?.dispose();
+    WakelockPlus.disable();
     super.dispose();
   }
 
@@ -264,6 +268,13 @@ class _LapTimerPageState extends State<LapTimerPage> {
   Future<void> _onStart() async {
     final id = int.tryParse(widget.trail.id ?? '');
     if (id == null) return;
+    // Anchor adaptive GPS sampling to the trail's start (lap = same as end).
+    if (_trailRoute.isNotEmpty) {
+      _svc.setSamplingAnchors(
+        start: _trailRoute.first,
+        end: _trailRoute.last,
+      );
+    }
     final ok = await _svc.startLapTimer(
       bike: widget.selectedBike,
       trailId: id,

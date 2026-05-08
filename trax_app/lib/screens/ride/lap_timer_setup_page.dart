@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -63,6 +64,16 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
   List<UserCheckpoint> _checkpoints = [];
   bool _isPickingCheckpoint = false;
   bool _addingCheckpoint = false;
+
+  // ── Slider-along-trail checkpoint placement ─────────────
+  // Cumulative metres along [_trailRoute]; same length as the route.
+  List<double> _cumDistM = const [];
+  double _trailLengthM = 0;
+  // Slider value in [0, 1] mapping to arc-length along the trail.
+  double _sliderT = 0.5;
+  // Existing checkpoint positions expressed as a fraction along the trail
+  // (0..1) so they can be drawn as ticks on the slider.
+  List<double> _checkpointTicks = const [];
 
   // Custom start location picker
   bool _isPickingStart = false;
@@ -188,11 +199,112 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
         _trailRoute = pts;
         _trailPointCount = pts.length;
         _isLoadingRoute = false;
+        _recomputeArcLengths();
+        _recomputeCheckpointTicks();
       });
       if (pts.isNotEmpty && _mapReady) _fitTrailBounds(pts);
     } else {
       setState(() => _isLoadingRoute = false);
     }
+  }
+
+  // ── Polyline arc-length helpers ──────────────────────────
+  void _recomputeArcLengths() {
+    if (_trailRoute.length < 2) {
+      _cumDistM = const [];
+      _trailLengthM = 0;
+      return;
+    }
+    final cum = <double>[0];
+    double total = 0;
+    for (var i = 1; i < _trailRoute.length; i++) {
+      total += _haversineM(_trailRoute[i - 1], _trailRoute[i]);
+      cum.add(total);
+    }
+    _cumDistM = cum;
+    _trailLengthM = total;
+  }
+
+  void _recomputeCheckpointTicks() {
+    if (_trailRoute.length < 2 || _trailLengthM <= 0) {
+      _checkpointTicks = const [];
+      return;
+    }
+    _checkpointTicks = _checkpoints
+        .map((cp) => _fractionOf(LatLng(cp.latitude, cp.longitude)))
+        .toList();
+  }
+
+  /// Linearly interpolate a position along the trail polyline at
+  /// fraction [t] in [0, 1] of total arc length.
+  LatLng _positionAtFraction(double t) {
+    if (_trailRoute.isEmpty) return const LatLng(0, 0);
+    if (_trailRoute.length == 1) return _trailRoute.first;
+    final target = (t.clamp(0.0, 1.0)) * _trailLengthM;
+    var lo = 0, hi = _cumDistM.length - 1;
+    while (lo < hi - 1) {
+      final mid = (lo + hi) >> 1;
+      if (_cumDistM[mid] <= target) {
+        lo = mid;
+      } else {
+        hi = mid;
+      }
+    }
+    final segStart = _cumDistM[lo];
+    final segEnd = _cumDistM[hi];
+    final segLen = (segEnd - segStart).abs();
+    final f = segLen > 0 ? (target - segStart) / segLen : 0.0;
+    final a = _trailRoute[lo];
+    final b = _trailRoute[hi];
+    return LatLng(
+      a.latitude + (b.latitude - a.latitude) * f,
+      a.longitude + (b.longitude - a.longitude) * f,
+    );
+  }
+
+  /// Project [p] onto the polyline and return the arc-length fraction (0..1).
+  double _fractionOf(LatLng p) {
+    if (_trailRoute.length < 2 || _trailLengthM <= 0) return 0;
+    var bestDist = double.infinity;
+    double bestArc = 0;
+    for (var i = 0; i < _trailRoute.length - 1; i++) {
+      final a = _trailRoute[i];
+      final b = _trailRoute[i + 1];
+      final segLen = _haversineM(a, b);
+      if (segLen <= 0) continue;
+      final cosLat = math.cos(a.latitude * math.pi / 180);
+      final bx = (b.longitude - a.longitude) * cosLat;
+      final by = b.latitude - a.latitude;
+      final px = (p.longitude - a.longitude) * cosLat;
+      final py = p.latitude - a.latitude;
+      final l2 = bx * bx + by * by;
+      var u = l2 > 0 ? (px * bx + py * by) / l2 : 0.0;
+      u = u.clamp(0.0, 1.0);
+      final cx = u * bx;
+      final cy = u * by;
+      final dx = px - cx;
+      final dy = py - cy;
+      final approxM = math.sqrt(dx * dx + dy * dy) * 111320.0;
+      if (approxM < bestDist) {
+        bestDist = approxM;
+        bestArc = _cumDistM[i] + segLen * u;
+      }
+    }
+    return (bestArc / _trailLengthM).clamp(0.0, 1.0);
+  }
+
+  static double _haversineM(LatLng a, LatLng b) {
+    const r = 6371000.0;
+    final dLat = (b.latitude - a.latitude) * math.pi / 180;
+    final dLng = (b.longitude - a.longitude) * math.pi / 180;
+    final s1 = math.sin(dLat / 2);
+    final s2 = math.sin(dLng / 2);
+    final h = s1 * s1 +
+        math.cos(a.latitude * math.pi / 180) *
+            math.cos(b.latitude * math.pi / 180) *
+            s2 *
+            s2;
+    return 2 * r * math.asin(math.sqrt(h));
   }
 
   void _fitTrailBounds(List<LatLng> pts) {
@@ -229,6 +341,7 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
         _checkpoints = (resp.data as List)
             .map((e) => UserCheckpoint.fromJson(e as Map<String, dynamic>))
             .toList();
+        _recomputeCheckpointTicks();
       });
       _warmCpMarkers();
     }
@@ -248,26 +361,24 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
 
   Future<BitmapDescriptor> _buildNumberedMarker(int seq) async {
     final dpr = MediaQuery.of(context).devicePixelRatio;
-    final r = 18.0 * dpr;
-    final borderW = 3.0 * dpr;
+    // Match the smaller circular badge style used for start/finish.
+    final r = 11.0 * dpr;
+    final borderW = 2.0 * dpr;
     final size = (r + borderW) * 2;
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, size, size));
     final cx = size / 2;
     final cy = size / 2;
-    // White outer ring
     canvas.drawCircle(
         Offset(cx, cy), r + borderW / 2, Paint()..color = Colors.white);
-    // Primary fill
     canvas.drawCircle(
         Offset(cx, cy), r, Paint()..color = AppColors.primary);
-    // Number
     final tp = TextPainter(
       text: TextSpan(
         text: '$seq',
         style: TextStyle(
           color: Colors.white,
-          fontSize: 20 * dpr,
+          fontSize: 13 * dpr,
           fontWeight: FontWeight.w900,
         ),
       ),
@@ -314,29 +425,28 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
   }
 
   Future<void> _confirmCheckpointAtCenter() async {
-    if (_selectedTrail == null || _mapController == null) return;
+    if (_selectedTrail == null) return;
     final id = int.tryParse(_selectedTrail!.id ?? '');
     if (id == null) return;
+    if (_trailRoute.length < 2) {
+      _toast('Trail has no path', isError: true);
+      return;
+    }
     setState(() => _addingCheckpoint = true);
     try {
-      final size = MediaQuery.of(context).size;
-      final centerScreen = ScreenCoordinate(
-        x: (size.width / 2).round(),
-        y: ((size.height -
-                    _checkpointBottomBarHeight() -
-                    MediaQuery.of(context).padding.top) /
-                2 +
-            MediaQuery.of(context).padding.top).round(),
-      );
-      final center = await _mapController!.getLatLng(centerScreen);
+      // Compute the position from the slider's arc-length fraction —
+      // by construction this lies on the trail polyline, so the
+      // server-side "not on the trail" check will always pass.
+      final cpPos = _positionAtFraction(_sliderT);
       final resp = await TraxApi.addTrailCheckpoint(
-          id, center.latitude, center.longitude);
+          id, cpPos.latitude, cpPos.longitude);
       if (!mounted) return;
       if (resp.isSuccess() && resp.data is List) {
         setState(() {
           _checkpoints = (resp.data as List)
               .map((e) => UserCheckpoint.fromJson(e as Map<String, dynamic>))
               .toList();
+          _recomputeCheckpointTicks();
         });
         _warmCpMarkers();
       } else {
@@ -362,6 +472,7 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
         _checkpoints = (resp.data as List)
             .map((e) => UserCheckpoint.fromJson(e as Map<String, dynamic>))
             .toList();
+        _recomputeCheckpointTicks();
       });
       _warmCpMarkers();
     } else {
@@ -1070,10 +1181,6 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
   // ───────────────────────────────────────────────────────────
   Widget _buildCheckpointPickView() {
     final safeTop = MediaQuery.of(context).padding.top;
-    final size = MediaQuery.of(context).size;
-    final bottomBarH = _checkpointBottomBarHeight();
-    final mapVisibleH = size.height - bottomBarH;
-    final pinTopOffset = safeTop + (mapVisibleH - safeTop) / 2 - 36;
 
     LatLng mapCenter;
     if (_trailRoute.isNotEmpty) {
@@ -1083,6 +1190,11 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
     } else {
       mapCenter = const LatLng(22.8956, 113.8739);
     }
+
+    // Live draft position from the slider — always on the polyline.
+    final draftPos = _trailRoute.length >= 2
+        ? _positionAtFraction(_sliderT)
+        : (_trailRoute.isNotEmpty ? _trailRoute.first : mapCenter);
 
     return Stack(
       fit: StackFit.expand,
@@ -1118,23 +1230,22 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
                 infoWindow:
                     InfoWindow(title: 'Checkpoint ${cp.sequenceIndex}'),
               ),
+            if (_trailRoute.length >= 2)
+              Marker(
+                markerId: const MarkerId('cp_draft'),
+                position: draftPos,
+                icon: BitmapDescriptor.defaultMarkerWithHue(
+                    BitmapDescriptor.hueViolet),
+                anchor: const Offset(0.5, 1.0),
+                zIndex: 5,
+                infoWindow: const InfoWindow(title: 'New Checkpoint'),
+              ),
           },
           onMapCreated: (c) {
             _mapController = c;
             _mapReady = true;
             if (_trailRoute.isNotEmpty) _fitTrailBounds(_trailRoute);
           },
-        ),
-
-        // Centered pin
-        Positioned(
-          left: 0, right: 0, top: pinTopOffset,
-          child: const IgnorePointer(
-            child: Center(
-              child: Icon(Icons.location_pin,
-                  size: 44, color: AppColors.error),
-            ),
-          ),
         ),
 
         // Top bar
@@ -1175,7 +1286,7 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
           ),
         ),
 
-        // Bottom action bar
+        // Bottom action bar with slider
         Positioned(
           left: 0, right: 0, bottom: 0,
           child: Container(
@@ -1197,11 +1308,11 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(Icons.location_pin,
-                        color: AppColors.error, size: 16),
+                    const Icon(Icons.tune,
+                        color: AppColors.primary, size: 16),
                     const SizedBox(width: 6),
                     Text(
-                      'Drag map to position the pin · ${_checkpoints.length}/4',
+                      'Drag the slider to position the checkpoint along the trail',
                       style: const TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
@@ -1209,11 +1320,14 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
-                // Existing checkpoint chips (so user can delete during placement)
+                const SizedBox(height: 10),
+                // Slider with start/end labels and existing-CP ticks.
+                _buildCheckpointSlider(),
+                const SizedBox(height: 4),
+                // Existing checkpoint chips (delete during placement).
                 if (_checkpoints.isNotEmpty)
                   Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.only(bottom: 8, top: 4),
                     child: Wrap(
                       spacing: 6, runSpacing: 6,
                       alignment: WrapAlignment.center,
@@ -1280,8 +1394,8 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
                                 size: 18, color: Colors.white),
                         label: Text(
                           _addingCheckpoint
-                              ? 'Validating…'
-                              : 'Add Checkpoint',
+                              ? 'Adding…'
+                              : 'Add',
                           style: const TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.w700,
@@ -1303,6 +1417,81 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
           ),
         ),
       ],
+    );
+  }
+
+  /// Slider that maps to arc-length along the trail polyline. Existing
+  /// checkpoints render as small ticks above the track so the user knows
+  /// which spots are already occupied.
+  Widget _buildCheckpointSlider() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Start / End labels with checkpoint tick marks.
+          SizedBox(
+            height: 18,
+            child: LayoutBuilder(
+              builder: (ctx, c) {
+                return Stack(
+                  children: [
+                    // Tick marks for existing checkpoints.
+                    for (var i = 0; i < _checkpointTicks.length; i++)
+                      Positioned(
+                        left: (c.maxWidth - 10) * _checkpointTicks[i] + 5,
+                        top: 2,
+                        child: Container(
+                          width: 2,
+                          height: 14,
+                          decoration: BoxDecoration(
+                            color: AppColors.primary,
+                            borderRadius: BorderRadius.circular(1),
+                          ),
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
+          ),
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 4,
+              activeTrackColor: AppColors.primary,
+              inactiveTrackColor:
+                  AppColors.primary.withValues(alpha: 0.25),
+              thumbColor: AppColors.primary,
+              overlayColor: AppColors.primary.withValues(alpha: 0.18),
+              thumbShape:
+                  const RoundSliderThumbShape(enabledThumbRadius: 9),
+            ),
+            child: Slider(
+              value: _sliderT,
+              min: 0,
+              max: 1,
+              onChanged: _trailRoute.length < 2 || _addingCheckpoint
+                  ? null
+                  : (v) => setState(() => _sliderT = v),
+            ),
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: const [
+              Text('Start',
+                  style: TextStyle(
+                      fontSize: 11,
+                      color: AppColors.textSecondary,
+                      fontWeight: FontWeight.w600)),
+              Text('End',
+                  style: TextStyle(
+                      fontSize: 11,
+                      color: AppColors.textSecondary,
+                      fontWeight: FontWeight.w600)),
+            ],
+          ),
+        ],
+      ),
     );
   }
 

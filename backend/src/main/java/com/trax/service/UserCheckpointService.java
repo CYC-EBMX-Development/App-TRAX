@@ -90,7 +90,10 @@ public class UserCheckpointService {
         UserCheckpoint cp = checkpointRepo.findByIdAndUserId(checkpointId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("Checkpoint not found"));
         Long trailId = cp.getTrail() != null ? cp.getTrail().getId() : null;
-        checkpointRepo.delete(cp);
+        // Soft delete — keep the row so historical ride records that
+        // reference the same trail still have referential context.
+        cp.setDeletedAt(java.time.LocalDateTime.now());
+        checkpointRepo.save(cp);
         if (trailId != null) {
             renumber(userId, trailId, loadTrailPolyline(trailId));
         }

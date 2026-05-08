@@ -108,4 +108,5 @@
 /Users/cyc_joshua/Documents/CYC/TRAX/App-TRAX/backend/src/main/java/com/trax/util/GeoUtils.java
 /Users/cyc_joshua/Documents/CYC/TRAX/App-TRAX/backend/src/main/java/com/trax/util/LapDetector.java
 /Users/cyc_joshua/Documents/CYC/TRAX/App-TRAX/backend/src/main/java/com/trax/util/PolylineDecoder.java
+/Users/cyc_joshua/Documents/CYC/TRAX/App-TRAX/backend/src/main/java/com/trax/util/StaticMapUrlBuilder.java
 /Users/cyc_joshua/Documents/CYC/TRAX/App-TRAX/backend/src/main/java/com/trax/util/TrailOptimizer.java

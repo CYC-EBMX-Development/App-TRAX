@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import '../../common/utils/map_gesture_recognizers.dart';
 import 'package:geolocator/geolocator.dart';
 import '../../models/ebike.dart';
@@ -36,6 +37,8 @@ class _FreeRidePageState extends State<FreeRidePage> {
   @override
   void initState() {
     super.initState();
+    // Keep the screen awake throughout the ride session.
+    WakelockPlus.enable();
     _svc.addListener(_onServiceUpdate);
     _initLocation();
   }
@@ -76,6 +79,7 @@ class _FreeRidePageState extends State<FreeRidePage> {
   void dispose() {
     _svc.removeListener(_onServiceUpdate);
     _mapController?.dispose();
+    WakelockPlus.disable();
     super.dispose();
   }
 
