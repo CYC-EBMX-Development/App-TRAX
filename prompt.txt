@@ -1,0 +1,863 @@
+================================================================================
+TRAX — Full From-Scratch Build Prompt Pack
+================================================================================
+Audience: an AI coding agent that will recreate the entire TRAX product
+(Spring Boot backend + Flutter mobile app) from an empty repository.
+
+How to use this file:
+  • Execute modules M0 → M28 in order.
+  • Each module is self-contained: GOAL, INPUTS, DELIVERABLES, ACCEPTANCE.
+  • Final form only — no iteration history, no patch language. Re-running
+    the modules from scratch must produce a product equivalent to the
+    current state of this repository.
+  • Code style: Java 17 / Spring Boot 3.4 for backend; Dart 3 / Flutter 3
+    with GetX for the app. No Lombok. Keep DTOs as plain POJOs.
+
+Self-validation gates run after each major module:
+  ▸ backend: `cd backend && mvn -q -DskipTests compile`
+  ▸ frontend: `cd trax_app && flutter analyze`
+  ▸ end-to-end smoke: backend boots on :8080, app launches on iOS sim,
+    user can register → log in → create bike → record trail → host race.
+
+================================================================================
+M0 · Repository Layout
+================================================================================
+GOAL: scaffold the monorepo.
+
+DELIVERABLES:
+  /backend                     Spring Boot 3.4 / Java 17 / Maven
+  /trax_app                    Flutter 3.x app (Dart 3, iOS+Android+web)
+  /hot_restart_all.sh          dev helper: SIGUSR2 to all flutter_tools
+  /rebuild.sh                  optional clean+rebuild helper
+  /README.md                   one-line title only ("# tra_x\ntrax project")
+
+ACCEPTANCE: both subprojects compile in isolation.
+
+================================================================================
+M1 · Backend Project Skeleton
+================================================================================
+GOAL: Maven project with all runtime deps wired.
+
+pom.xml (groupId=com.trax, artifactId=trax-backend, java.version=17,
+spring-boot-starter-parent 3.4.4). Dependencies:
+  spring-boot-starter-web, spring-boot-starter-data-jpa,
+  spring-boot-starter-security, spring-boot-starter-validation,
+  com.h2database (runtime), io.jsonwebtoken jjwt-api/impl/jackson 0.12.6,
+  org.jsoup 1.15.4, spring-boot-starter-test (test).
+
+src/main/java/com/trax/TraxApplication.java: standard @SpringBootApplication.
+
+src/main/resources/application.yml:
+  spring.datasource.url=jdbc:h2:file:./traxdb (sa / empty)
+  spring.h2.console.enabled=true, path=/h2-console
+  spring.jpa.hibernate.ddl-auto=update, dialect=H2
+  spring.web.resources.static-locations:
+    classpath:/static/,file:<absolute path to backend/images/>
+  server.port=8080
+  jwt.secret=trax-secret-key-for-jwt-token-generation-min-256-bits-long-key
+  jwt.expiration=86400000
+  google.maps.api-key=<env-injected>
+
+ACCEPTANCE: `mvn -q -DskipTests compile` succeeds.
+
+================================================================================
+M2 · Backend Security & JWT
+================================================================================
+GOAL: stateless JWT auth, BCrypt passwords, permissive H2 console.
+
+Files under com.trax.security:
+  • JwtUtil — HMAC-SHA from configured secret; generateToken(email),
+    extractEmail, validateToken. Uses jjwt 0.12.x builder API
+    (.subject/.signWith/.verifyWith).
+  • JwtAuthFilter (OncePerRequestFilter) — reads "Authorization: Bearer ..",
+    on success sets SecurityContext with the loaded User principal.
+
+com.trax.config:
+  • SecurityConfig — STATELESS session, CSRF disabled, frameOptions disabled
+    (for H2 console), permitAll on:
+      /api/auth/**, /h2-console/**, /api/trax-modules/**, /api/bike-models/**,
+      /api/bikes/**, /images/**, /api/modules/**, /api/mock/**
+    everything else authenticated. Adds JwtAuthFilter before
+    UsernamePasswordAuthenticationFilter. Bean: BCryptPasswordEncoder.
+  • CorsConfig — allow * origins/methods/headers globally.
+  • AppConfig — RestTemplate bean.
+
+ACCEPTANCE: hitting `/api/auth/login` without token works; hitting
+authenticated endpoint with no header returns 401-ish (compile-only).
+
+================================================================================
+M3 · Backend Domain Model (JPA Entities)
+================================================================================
+GOAL: complete persistence model. All entities under com.trax.model with
+plain getters/setters and @PrePersist/@PreUpdate where noted.
+
+Identity & Garage
+  • User (table users) — id, email (unique), password (BCrypt), name,
+    avatarUrl, rewardPoints, OneToMany bicycles, createdAt, updatedAt.
+    @PrePersist sets both timestamps; @PreUpdate refreshes updatedAt.
+    (updatedAt is the source of the avatar cache-buster — see M7.)
+  • Bicycle — name, motor, controller, battery, other, imageUrl,
+    traxSerialNumber, motorCertified/controllerCertified/batteryCertified,
+    ManyToOne owner→User (NOT NULL), ManyToOne model→BikeModel (nullable),
+    ManyToOne module→TraxModule (nullable). Created/updatedAt with hooks.
+  • HistoryBicycle — flat snapshot of Bicycle for archival on delete.
+    Static factory fromBicycle(b). archivedAt set on @PrePersist.
+  • BikeBrand — id, name (unique), imageUrl, OneToMany models.
+  • BikeModel — brand, modelName, imageUrl, motorType, motorPeakPowerW,
+    motorTorqueNm, controller, batteryType, batteryVoltage,
+    batteryCapacityWh.
+  • TraxModule — serialNo (unique), name, bound (boolean default false),
+    ManyToOne model→BikeModel (nullable, EAGER).
+
+Telemetry
+  • ModuleTelemetry — module, lat, lng, speed, batteryPercent,
+    signalStrength, timestamp.
+  • ControllerTelemetry — 26-channel VESC payload (FET temp, motor temp,
+    avg motor/input current, id/iq, duty cycle, RPM, input voltage,
+    Ah/Wh cumulative, encoder sin/cos, throttle/regen ADC, fault code,
+    digital input state, controller id, NTC MOS A/B/C, Vd/Vq,
+    odometerM, speedKmh, rsMode, assistLevel). 1:1 to a RidePoint by id,
+    indexed by ride_id and timestamp.
+
+Trails
+  • Trail — name, location, difficulty (EASY/MEDIUM/HARD/EXTREME),
+    description, imageUrl, distance, elevation, type (`free_ride` | `lap`),
+    creatorId, start/endLatitude, start/endLongitude, createdAt,
+    deleted=false, isPublic=true.
+  • TrailPoint — trail FK, latitude, longitude, altitude, sequenceIndex,
+    timestamp.
+  • UserCheckpoint — per-user trail CPs (max 4); unique
+    (user_id, trail_id, sequence_index); lat/lng; createdAt.
+
+Rides
+  • RideRecord — user, trail, bicycle, startTime, endTime, distance,
+    avgSpeed, maxSpeed, elevation, weather, status
+    (active|paused|completed), mode (with_module|without_module),
+    totalPausedSeconds, lastPausedAt, targetLaps, completedLaps,
+    source (free_ride|lap_timer|race), hiddenByOwner.
+  • RidePoint — ride, lat, lng, speed, altitude, timestamp.
+  • RideLap — rideId, lapNumber (unique with rideId), startTime, endTime,
+    durationSeconds, distanceKm, overlapPercent.
+  • RideLapCheckpoint — lapId, sequenceIndex (unique with lapId),
+    passTime, lat, lng.
+  • HistoryRideRecord / HistoryRidePoint — archival mirrors.
+
+Races
+  • Race — host (User), trail, name, scheduledTime, maxParticipants,
+    targetLaps, isPublic, notes, joinCode (6 chars, unique), status
+    (waiting|preparing|in_progress|completed|canceled), gameType
+    (`RACE`|`LAPS`, default RACE), startedAt, endedAt, createdAt.
+  • RaceParticipant — race, user (unique together), role
+    (host|rider|observer), ride (nullable), bicycle (nullable), joinedAt,
+    status (joined|ready|racing|finished|dnf), finishRank, bestLapSeconds,
+    latitude, longitude.
+
+Misc
+  • Performance — best-time/best-speed snapshot per user/trail/ride.
+  • Product — id, name, description, price, imageUrl, category
+    (new|secondhand), type (conversion_kit|accessory).
+
+ACCEPTANCE: schema auto-creates on first boot under traxdb.mv.db.
+
+================================================================================
+M4 · Backend Utility Layer
+================================================================================
+com.trax.util:
+  • GeoUtils — haversineKm, pointToSegmentKm (Heron), pointToPolylineMeters,
+    projectOntoPolyline → Projection(segmentIndex, segmentFraction,
+    distanceMeters).
+  • PolylineDecoder — decode Google encoded polyline → List<double[]>.
+  • TrailOptimizer — speed filter (<=100 km/h), min-distance filter (3 m),
+    outlier filter (50 m perpendicular), Douglas-Peucker (epsilon = 2 m).
+    Re-indexes sequenceIndex 0..N-1.
+  • LapDetector — constants LAP_CLOSE_THRESHOLD_KM=0.05,
+    MIN_LAP_EXCURSION_KM=0.05, MIN_LAP_DISTANCE_KM=0.1. Methods
+    isLapComplete, snapToLap (snap last point to first).
+  • AvatarUrls — versioned(User) and versioned(rawUrl, updatedAt) — appends
+    `?v=<epochSecondsOfUpdatedAt>` (or `&v=...`) idempotently. Used at every
+    DTO that emits an avatar URL so Flutter `NetworkImage` cache invalidates
+    automatically on profile updates.
+
+com.trax.exception.GlobalExceptionHandler — @RestControllerAdvice; map
+RuntimeException → ApiResponse.error(40000, msg) and Exception → 50000.
+
+================================================================================
+M5 · Backend DTOs & ApiResponse Envelope
+================================================================================
+Standard envelope: ApiResponse<T> { boolean flag, int code (200=success,
+40000/50000=error), String message, T data }. Static factories
+success(data), success(msg,data), error(code,msg).
+
+Auth DTOs: LoginRequest (@Email/@NotBlank), LoginByPwdRequest
+(username/password), RegisterRequest (name/email/password min 6),
+RegisterByPwdRequest (email/password/verificationCode), ResetPasswordRequest,
+LoginData(accessToken, tokenType, UserDto), AuthResponse(token, Map user),
+UserDto(id, username, email, avatarUrl).
+
+Domain DTOs (each provides static fromEntity(...) and emits avatar URLs
+through AvatarUrls.versioned):
+  • BicycleDto — flat bike + brand/model strings + isConnected.
+  • TrailDto — trail fields + creator(UserDto).
+  • UserCheckpointDto.
+  • RaceDto — race fields + trailName + hostName + hostAvatarUrl(versioned)
+    + currentParticipants + List<RaceParticipantDto> participants + myRole.
+  • RaceParticipantDto — id, userId, userName, userAvatarUrl(versioned),
+    role, status, finishRank, bestLapSeconds, bicycleId, bicycleName,
+    rideId, joinedAt.
+  • RaceLiveDto { targetLaps; List<RiderLiveInfo> riders } where
+    RiderLiveInfo carries userId, userName, userAvatarUrl(versioned),
+    status, finishRank, bestLapSeconds, bicycleId, bicycleName, rideId,
+    currentLat, currentLng, lapsCompleted, lastCheckpointIndex,
+    List<LapInfo> laps (lapNumber/startTime/endTime/durationSeconds/
+    distanceKm/overlapPercent), List<LatLng> route (live polyline so far).
+  • RideStatsDto / RidePointDto / RideLapDto / RideLapCheckpointDto for
+    summary+replay.
+
+================================================================================
+M6 · Backend Repositories
+================================================================================
+Spring Data JPA interfaces under com.trax.repository for every entity, plus
+domain finder methods used by services, e.g.:
+  • UserRepository.findByEmail
+  • BikeBrandRepository.findByName
+  • BikeModelRepository.findByModelNameAndBrand_Name
+  • TraxModuleRepository.findBySerialNo
+  • TrailRepository.findAllByDeletedFalseAndIsPublicTrue, findByCreatorId
+  • TrailPointRepository.findByTrail_IdOrderBySequenceIndexAsc
+  • UserCheckpointRepository.findByUser_IdAndTrail_IdOrderBySequenceIndexAsc
+  • RideRecordRepository.findByUserAndStatus, findByUser_IdOrderBy...
+  • RidePointRepository.findByRide_IdOrderByTimestampAsc
+  • RideLapRepository.findByRideIdOrderByLapNumberAsc
+  • RaceRepository.findByJoinCode, findByIsPublicTrueAndStatus
+  • RaceParticipantRepository.findByRaceAndUser, findByUser_Id
+  • plus history mirrors.
+
+================================================================================
+M7 · Backend AvatarUrls Wiring
+================================================================================
+Every DTO that emits an avatar URL must route through
+`AvatarUrls.versioned(...)`. Required emission sites:
+  1. AuthService.buildLoginData → UserDto.
+  2. RaceParticipantDto.fromEntity (host, rider, observer rows).
+  3. RaceDto.fromEntity (hostAvatarUrl).
+  4. RaceLiveDto.RiderLiveInfo (per-rider avatar in live polling payload).
+  5. (Trail creator avatars when surfaced through TrailDto.creator.)
+
+Rationale: Flutter `NetworkImage`/marker bitmap caches key by URL.
+Bumping `?v=<updatedAt>` deterministically invalidates them on profile edit.
+
+================================================================================
+M8 · Backend Services
+================================================================================
+com.trax.service:
+
+AuthService
+  • register(RegisterRequest) → save User with BCrypt, emit LoginData.
+  • loginByPwd(LoginByPwdRequest) → authenticate by email or username,
+    issue JWT, build LoginData(accessToken, "Bearer", UserDto).
+  • resetPassword, checkEmailAvailable.
+  • buildLoginData(User) → wraps avatar via AvatarUrls.versioned.
+
+UserService
+  • profile, updateProfile (uploads avatar to /backend/images/avatars/<id>.png
+    via static-resource path and stamps user.avatarUrl).
+
+BikeBrandService / BikeModelService / TraxModuleService — CRUD reads.
+
+BicycleService — CRUD against current authenticated user; on delete, copy
+into HistoryBicycle then remove.
+
+TrailService
+  • createTrail(payload) → optimize incoming points via TrailOptimizer,
+    compute distance/elevation, persist Trail + TrailPoints; auto-set
+    start/end LatLng from first/last points.
+  • listPublicTrails, listMyTrails, get, softDelete.
+  • getPoints(trailId) (downsampled if huge), togglePublic.
+  • UserCheckpointService — list/add/delete; max 4 per (user, trail).
+
+RideService — the algorithmic core.
+  • startRide(bikeId, trailId, mode, source, targetLaps?).
+  • appendPoints(rideId, batch) → persist RidePoints, recompute distance
+    and avg/max speed running totals, perform live LAP DETECTION:
+
+    Lap detection algorithm (CLIENT MUST MIRROR THIS — see M19):
+      • startPoint = first sample of the ride.
+      • headingUnit = unit vector (north,east) toward the first sample
+        ≥ 5.0 m from startPoint.
+      • finishLine = perpendicular through startPoint with half-width
+        15 m on each side (`lapFinishLineHalfWidthKm = 0.015`).
+      • For each adjacent pair (prev, curr) of samples, compute
+        segmentIntersectionParam((prev,curr), (A,B)). On intersection:
+          – Velocity vector v = curr - prev.
+          – Forward filter: dot(v, headingUnit) > 0 (only count when
+            crossing in the same direction as the original lap heading).
+          – Hysteresis: maxAwayKm since last lap close ≥ 0.15 km AND
+            elapsed seconds since last lap close ≥ 15.
+        If all three pass: linearly interpolate the exact crossing
+        lat/lng/altitude/timestamp using the segment parameter t and
+        emit a RideLap. Reset maxAwayKm + lap-start time.
+      • Whenever rider passes a UserCheckpoint within 25 m, append a
+        RideLapCheckpoint to the in-progress lap.
+  • pauseRide / resumeRide (track totalPausedSeconds).
+  • stopRide → status=completed, finalize stats.
+  • deleteOwnRide → set hiddenByOwner=true (other users still see in races).
+  • listMyRides, getRideStats, getRidePoints, getRideLaps.
+
+RaceService
+  • createRace(payload) → host inserted as RaceParticipant role=host;
+    generates 6-char joinCode (uppercase alphanum).
+  • listPublic, listPublicForObserver, listMyEvents (paged), get(id).
+  • joinRace(id, bicycleId?), joinByCode(code, role, bicycleId?),
+    observeRace, quitRace, setBike, updateType (public/private toggle).
+  • startRaceEvent → status=preparing (riders ready up & report GPS).
+  • readyForRace → participant.status=ready.
+  • goRace → status=in_progress, startedAt=now, auto-create a RideRecord
+    (source=race) for every rider participant.
+  • stopRaceEvent → status=completed, endedAt=now; for each rider, finalize
+    its underlying RideRecord; assign finishRank by laps completed
+    (RACE mode) or bestLapSeconds (LAPS mode); riders with
+    completedLaps<targetLaps get status=dnf.
+  • cancelRaceEvent.
+  • reportLocation(raceId, lat, lng) → updates participant lat/lng AND, if
+    in_progress, appends a RidePoint to the rider's RideRecord (which
+    triggers lap detection).
+  • getRaceLive(id) → assembles RaceLiveDto with each rider's polyline so
+    far + completed laps + lastCheckpointIndex.
+
+ImageDownloadService — downloads bike images by brand/model name into
+/backend/images/bikes/<BRAND>/<model>.png using jsoup-scraped Bing image
+search; falls back to createPlaceholderImage() (gray PNG with text).
+
+================================================================================
+M9 · Backend Controllers
+================================================================================
+All under com.trax.controller; every endpoint returns ApiResponse<T>.
+
+  AuthController         POST /api/auth/register, /login, /loginByPwd,
+                         /resetPassword; GET /api/auth/checkEmail
+  UserController         GET /api/user/profile, POST /api/user/profile,
+                         POST /api/user/avatar (multipart)
+  BikeBrandController    GET /api/bike-brands, /api/bike-brands/{id}/models
+  BikeModelController    GET /api/bike-models, /{id}
+  TraxModuleController   GET /api/trax-modules, /unbound,
+                         /by-serial/{serial}; POST /bind, /unbind
+  BicycleController      CRUD under /api/bikes (auth-required is the user's
+                         own collection; permitAll only for the public
+                         catalog reads at /api/bike-models).
+  TrailController        GET /api/trails, /api/trails/mine,
+                         GET /api/trails/{id}, /points, /checkpoints
+                         POST /api/trails (create with embedded points)
+                         POST /api/trails/{id}/checkpoints
+                         DELETE /api/trails/checkpoints/{id}
+                         POST /api/trails/{id}/visibility
+                         DELETE /api/trails/{id}
+  RideController         POST /api/rides/start, /append, /pause, /resume,
+                         /stop; DELETE /api/rides/{id};
+                         GET /api/rides/{id}/stats, /points, /laps;
+                         GET /api/rides/mine
+  RaceController         POST /api/races (create), /{id}/join, /{id}/observe,
+                         /{id}/quit, /{id}/start, /{id}/stop, /{id}/cancel,
+                         /{id}/ready, /{id}/go, /{id}/bike,
+                         /{id}/visibility, /{id}/report-location;
+                         POST /api/races/join-by-code/{code};
+                         GET /api/races/public, /public-observer,
+                         /my-events (paged), /{id}, /{id}/live
+
+ACCEPTANCE: backend boots; H2 console accessible at /h2-console.
+
+================================================================================
+M10 · Backend DataInitializer
+================================================================================
+@Component implementing ApplicationRunner. On startup:
+  1. If brand table empty → seed:
+     – Brands: BONNELL, RISTRETTO, Talaria, Sur-Ron, E Ride, RERODE.
+     – Per-brand BikeModel rows matching the catalog in this repo
+       (BONNELL 775 MX/AM/805/902; RISTRETTO 512 A20/A24; Talaria X3 Pro/
+       Komodo/Sting MX5/LE1/Dragon/MX4 family/X3 XXX; Sur-Ron Hyper Bee,
+       Light Bee X/L, Ultra Bee HP/R/T, Storm Bee E/F; E Ride Pro-SR/S/
+       SS 2.0/3.0/Mini; RERODE R1/R1+).
+     – Seed TraxModule rows: TRX-7A2B (CYC Gen4), TRX-3F9C (Sur-Ron Light
+       Bee X — bound), TRX-12DE (generic, no model), TRX-4B1A (CYC Photon),
+       TRX-9D5B (BONNELL 805), TRX-8C3A (BONNELL 902).
+     – Run ImageDownloadService for every model; fall back to placeholder.
+  2. patchModules() — re-runnable: insert TRX-9D5B / TRX-8C3A if missing.
+  3. patchUserAvatars() — for users named Joshua/Steve/Royce, set avatar
+     to http://localhost:8080/images/avatars/<lowername>.png.
+
+================================================================================
+M11 · Frontend Project Skeleton
+================================================================================
+GOAL: Flutter app at /trax_app. SDK ^3.11.4.
+
+pubspec.yaml dependencies:
+  cupertino_icons ^1.0.8, get ^4.7.2, dio ^5.9.0, shared_preferences ^2.5.4,
+  flutter_svg ^2.0.16, flutter_smart_dialog ^4.9.8+9, pinput ^5.0.2,
+  cached_network_image ^3.4.1, intl ^0.19.0, google_maps_flutter ^2.10.0,
+  geolocator ^13.0.2.
+
+Assets: assets/images/ (login.png, page_bkg.png), assets/svg/
+(google_logo.svg, apple_logo.svg, facebook_logo.svg).
+
+iOS Podfile: platform :ios, '15.0'.
+Android: minSdk 21, location + foreground service permissions.
+Web: stub index.html (Google Maps key not wired for web).
+
+main.dart:
+  • Restore last-known LoginData from TraxStorageUtil → hydrate
+    GlobalUserInfo Rx fields before runApp.
+  • GetMaterialApp with TraxRouter.routes, theme = AppTheme.light.
+  • Initial route: Welcome page if no token, else MainScreen.
+
+================================================================================
+M12 · Frontend Theme & Common Widgets
+================================================================================
+lib/theme/app_theme.dart — `AppColors` constants:
+  primary 0xFF6A00FF, primaryDark 0xFF4D00CC, surface 0xFFFFFFFF,
+  background 0xFFF5F6FA, textPrimary 0xFF1B1C20,
+  textSecondary 0xFF6E7384, divider 0xFFE5E7EE, success 0xFF1FB36A,
+  warning 0xFFF6A623, error 0xFFE6353B.
+Plus `AppTheme.light()` with Material 3 ColorScheme based on AppColors.
+
+lib/common/widgets:
+  • TraxButton (primary / outline / ghost variants).
+  • TraxTextField (filled rounded).
+  • TraxDialog (showBottomTipsDialog, confirm, … using Get.dialog).
+  • TraxRefreshButton + showTraxSnackBar (SnackBar wrapper).
+  • TraxOrWidget (divider with "OR").
+  • TraxPageWidget (background image scaffold).
+  • PageCodeBadge — debug overlay; wrap each screen with
+    `PageCodeBadge(code: 'NNN', child: ...)` in build().
+  • BikePicker / BikePickerTile — modal bike selector backed by /api/bikes.
+  • BikeInfoDialog, ModelImageCard.
+
+lib/common/utils:
+  • TraxStorageUtil — SharedPreferences wrapper (token, user JSON,
+    selectedBikeId, page-code-display flag).
+  • TraxNavigationUtil, TraxValidatorUtil, TraxDebouncer, AppRestart.
+  • map_gesture_recognizers.dart — `kMapGestureRecognizers` const set
+    enabling pan/zoom inside scroll views (EagerGestureRecognizer factory).
+  • static_map_url.dart — StaticMapUrl.forRoute(pts, width, height, scale,
+    pathColor) builds a Google Static Maps URL from an encoded polyline.
+  • trail_thumbnail.dart — process-lifetime cache `Map<int,Uint8List>`,
+    downsamples to ≤120 points, calls Static Maps. **Dio adapter under
+    `kDebugMode` is wired with `IOHttpClientAdapter()..createHttpClient = (_) {
+      final c = HttpClient();
+      c.findProxy = (_) => 'PROXY 127.0.0.1:7897';
+      c.badCertificateCallback = (_, __, ___) => true;
+      return c;
+    };` — required because Google APIs are unreachable from this dev
+    environment without the local proxy.**
+  • cp_marker_icons.dart — `CpMarkerIcons.warm(ctx, indices)` pre-builds
+    numbered round pins (radius 11·dpr, white border 2·dpr, AppColors.primary
+    fill, font 13·dpr bold). Markers placed with zIndex 0 so live rider
+    avatars (M21) sit above them.
+  • start_end_marker_icons.dart — fixed bitmap descriptors for trail
+    start/finish (green circle), end (red), lap-start (blue).
+  • ride_checkpoints.dart — derive CP markers from completed laps when
+    no UserCheckpoints exist (used in replay).
+
+lib/common/network:
+  • AppResponse<T> { code, message, data; bool isSuccess() => code==200 }.
+  • AppTokenInterceptor — adds `Authorization: Bearer <token>`,
+    handles 401 → log out → push WelcomePage.
+  • TraxApi — singleton Dio (baseUrl = `http://localhost:8080/api`,
+    timeout 15s; in `kDebugMode` install the same proxy as
+    trail_thumbnail). Exposes one method per endpoint listed in M9, each
+    returning `Future<AppResponse<dynamic>>`. Includes:
+      Auth: register, loginByPwd, resetPassword, checkEmail
+      User: getProfile, updateProfile, uploadAvatar
+      Bikes: getUserBikes, createBike, updateBike, deleteBike,
+             getBikeBrands, getModelsByBrand, bindModule, unbindModule
+      Trails: getTrails, getMyTrails, getTrail, getTrailPoints,
+              createTrail, getTrailCheckpoints, addTrailCheckpoint,
+              deleteTrailCheckpoint, setTrailVisibility, deleteTrail
+      Rides: startRide, appendRidePoints, pauseRide, resumeRide, stopRide,
+             deleteRide, getRideStats, getRidePoints, getRideLaps,
+             getMyRides
+      Races: createRace, getPublicRaces, getPublicRacesForObserver,
+             getMyEvents (paged), getRace, getRaceLive, joinRace,
+             joinByCode, observeRace, quitRace, setRaceBike,
+             updateRaceType, startRaceEvent, stopRaceEvent,
+             cancelRaceEvent, readyForRace, goRace, reportLocation
+
+lib/common/global/global_user_info.dart — GetX singleton with reactive
+fields `Rxn<int> id`, `Rxn<String> name/email/avatar`. setLogin(LoginData),
+clear(), persisted via TraxStorageUtil.
+
+lib/routers/trax_router.dart — named routes table for every screen plus
+helpers `toLogin`, `toMainOffAll`, `toWelcomeOffAll`, `toBikeProfile`, etc.
+
+================================================================================
+M13 · Frontend Models
+================================================================================
+lib/models/*.dart — JSON-back/forth value types matching the backend DTOs:
+  user.dart (id/name/email/avatarUrl), ebike.dart, ebike_history.dart,
+  ebike_model_data.dart, bike_brand.dart, bike_model.dart,
+  module_telemetry.dart, product.dart, trail.dart (parses both `id` as
+  int or string), user_checkpoint.dart, race.dart (with helpers
+  isWaiting/isPreparing/isInProgress/isCompleted/isCanceled/isHost/
+  isRider/isObserver/isLaps/isPublic; copyWith for optimistic UI
+  toggles), race_live_data.dart (with nested `RiderLiveInfo` mirroring
+  backend), ride_record.dart, ride_point.dart, ride_lap.dart,
+  ride_stats.dart, tracker_result.dart.
+
+================================================================================
+M14 · Auth Flow (Welcome / Login / Sign-up)
+================================================================================
+lib/features/login/:
+  • welcome_page (page code 100): full-bleed background, Sign Up + Log In.
+  • login_page (101): email + password (`pinput` for code input on reset),
+    branded social buttons (SVGs), forgot-password sheet.
+  • create_account_page (102).
+  • LoginPageController: on success persist LoginData via TraxStorageUtil,
+    populate GlobalUserInfo, route to MainScreen with Get.offAllNamed.
+
+ACCEPTANCE: round-trip register → login persists across app restart.
+
+================================================================================
+M15 · Main Shell, Home, Profile
+================================================================================
+lib/screens/main/main_screen.dart (200) — IndexedStack with bottom NavBar
+(Home / Trails / Garage / Session / Profile). Uses AppColors.primary
+selected colour; NotchedShape FAB-less.
+
+lib/screens/home/home_screen.dart (300) — top app bar shows GlobalUserInfo
+avatar (Obx → CircleAvatar over NetworkImage(GlobalUserInfo.instance.avatar.value)).
+Body: hero card "Ready to ride?" with "Start Ride" CTA → ride_screen,
+shortcut tiles for Free Ride / Lap Timer / Race / My Events, recent rides
+list (TraxApi.getMyRides limit 5).
+
+lib/screens/profile/profile_screen.dart (500) — large avatar (tap to edit
+via uploadAvatar), name, email, reward points; sections: My Bikes,
+My Trails, My Events, Settings (Map type, Page-code badge toggle, Logout).
+Logout: TraxStorageUtil.clearAll → GlobalUserInfo.clear → toWelcomeOffAll.
+
+lib/screens/session/session_screen.dart (700) — placeholder.
+lib/screens/shop/shop_screen.dart (800) — Product list grid (uses /api).
+
+================================================================================
+M16 · Garage
+================================================================================
+lib/screens/garage:
+  • garage_screen (600) — list of user's bikes; FAB → create.
+  • ebike_profile_page (601) — bike detail with Motor / Controller /
+    Battery / Other cards (cert checkmark when matched against module
+    spec); Bind / Unbind TRAX module.
+  • ebike_parts_page (602) — picker for motor/controller/battery strings.
+  • model_picker_page (603) — brand → model two-step picker backed by
+    /api/bike-brands and /api/bike-brands/{id}/models.
+  • available_devices_page (604) — list unbound TRAX modules
+    (/api/trax-modules/unbound).
+  • trax_module_inquiry_page (605) — by-serial lookup + bind action.
+
+================================================================================
+M17 · Trails List & Detail
+================================================================================
+lib/screens/trails:
+  • trails_screen (900) — `_TrailCard` rows: thumbnail rendered via
+    `loadTrailThumbnail(trailId, points)` (Dio with debug proxy);
+    distance/elevation/type stats; reverse-geocoded location;
+    creator avatar (NetworkImage hits backend versioned URL).
+    Tabs: All / Mine. FAB → trail_record_page.
+  • trail_detail_page (901) — full-screen GoogleMap with route polyline,
+    Start/End markers (start_end_marker_icons), CTA buttons:
+    "Start Free Ride" → ride_screen with prefilled trail; "Start Lap Timer"
+    → lap_timer_setup_page; "Host Race" → host_race_page.
+  • trail_save_page (903) — name, difficulty (segmented control),
+    type (free_ride/lap), visibility, notes; POST /api/trails with
+    embedded points; pop with the new trail.
+
+================================================================================
+M18 · Trail Record (4 modes)
+================================================================================
+lib/screens/trails/trail_record_page.dart (902) — single page with four
+recording modes selectable from the idle controls bar. Shared structure:
+  • Status FSM: idle | recording | paused | stopped.
+  • GoogleMap with map-type toggle (normal/satellite/hybrid/terrain).
+  • Bottom panel showing current distance, elapsed, sample count,
+    plus mode-specific controls.
+  • Lat,Lng input bar at top for jump-to-coord.
+
+Modes:
+  1. Real GPS — Geolocator.getPositionStream(LocationSettings(accuracy:
+     LocationAccuracy.bestForNavigation, distanceFilter: 5)). Append each
+     fix into `_route` (List<LatLng>) and `_points` (List<_RecordedPoint>
+     {lat,lng,altitude,timestamp}). Live polyline updates.
+  2. Pick Location — crosshair pinned to map centre; "Add point" button
+     reads `_mapController.getLatLng(centerScreenCoord)` and appends.
+  3. Simulate Lap (Draw) — disables map gestures, overlays a transparent
+     GestureDetector with onPanStart/Update/End. Each pointer sample is
+     converted via `_mapController.getLatLng(ScreenCoordinate)` chained on
+     a `Future _drawChain` so calls serialize. Downsample by 6 px screen
+     distance. Polyline updates in real time. Toolbar: Clear / Cancel /
+     Finish; Finish wraps the points as `_RecordedPoint`s and pushes
+     TrailSavePage.
+  4. Start Lap Recording — starts a real-GPS recording but auto-stops
+     when the rider crosses the lap finish line, then trims the route to
+     a clean loop and pushes TrailSavePage. **Algorithm must match the
+     backend RideService lap detector exactly:**
+       • startPoint = first sample.
+       • headingUnit = unit vector to the first sample ≥ 5.0 m away from
+         start (`headingRefMinMeters = 5.0`).
+       • Build perpendicular finish-line endpoints A,B at ±15 m from
+         start (`lapFinishLineHalfWidthKm = 0.015`).
+       • For each adjacent (prev, curr) call `segmentIntersectionParam`
+         between (prev,curr) and (A,B). On intersection:
+           – Forward filter: `dot(curr-prev, headingUnit) > 0`.
+           – Hysteresis: `_lapMaxAwayKm ≥ 0.15` AND
+             elapsedSec ≥ 15 (`lapMinExcursionKm = 0.15`,
+             `lapMinDurationSec = 15`).
+       • Linearly interpolate the exact crossing lat/lng/altitude/timestamp
+         using parameter t, replace the last `_route`/`_points` entry
+         with the interpolated value, then call `_onStop()`.
+     UI hint banner cycles through:
+       waiting-for-first-sample → waiting-for-heading-lock →
+       locked, auto-stop armed.
+     A blue "Lap Start / Finish" marker is placed at the start point.
+
+Constants are lowerCamelCase (no SCREAMING_SNAKE). Distance helper
+`_haversineKm` is defined exactly once.
+
+================================================================================
+M19 · Active Ride Service & Free Ride
+================================================================================
+lib/services/active_ride_service.dart — singleton ChangeNotifier holding
+the in-progress ride (rideId, status, route LatLngs, currentPos,
+elapsed/duration, RideStats, pause state). Methods: startFreeRide,
+startLapTimer, appendBatch (every 5 s, using TraxApi.appendRidePoints),
+pause, resume, stopRide, clearCompleted.
+
+lib/screens/ride/ride_screen.dart (400) — entry hub:
+  Free Ride / Lap Timer / Host Race / Join Race / Watch / My Events.
+
+lib/screens/ride/free_ride_page.dart (401) — minimalist GoogleMap +
+Start/Pause/Stop FAB stack; on stop → ride_summary_page.
+
+================================================================================
+M20 · Lap Timer
+================================================================================
+lap_timer_setup_page (404) — pick a `lap` trail from a bottom-sheet
+picker (auto-opens on first entry, OK-only; reopened later with Cancel).
+Shows trail card (thumbnail+distance), my checkpoints list with Add (max
+4) using a full-screen pick-mode overlay with crosshair, target-lap
+counter, and "Start N-Lap Session".
+
+lap_timer_page (405) — half-screen GoogleMap with trail polyline + start
+marker + numbered CP markers (CpMarkerIcons.warm) toggleable via top
+button. Bottom panel uses LapSplitsGrid for live cumulative splits.
+Live in-progress CP detection: 25 m radius (`_cpPassMeters = 25`); lap
+gate-arm display at 30 m (`_gateArmMeters = 30`). Lap counting itself is
+server-authoritative (read RideStats.laps). Auto-navigates to
+RideSummaryPage on auto-stop when target laps reached.
+
+ride_summary_page (413) — full ride card, lap splits grid, Done button
+(pop to first), Delete button.
+
+ride_replay_page (412) — scrub timeline; map area is always
+`Expanded(child: GoogleMap(...))` so its visible region stays constant
+no matter how much content the bottom panel renders. Rider marker uses
+default azure pin; CP markers from ride_checkpoints.dart.
+
+================================================================================
+M21 · Race Lifecycle UI
+================================================================================
+lib/screens/ride/host_race_page (402) — RACE-mode lobby creator. Form:
+name, trail (TrailPickerPage), bike (BikePickerTile), scheduled date/time,
+maxParticipants (counter 2..50), targetLaps (1..100), public toggle, notes.
+Submits POST /api/races and pushes RaceDetailPage.
+
+host_laps_page (410) — same form layout as host_race but submits
+`gameType: 'LAPS'`; defaults targetLaps=3.
+
+join_race_page (403) — input a 6-char join code (Pinput-style TextField,
+uppercase) + list of public RACEs; tap card → RaceDetailPage.
+
+observe_race_page (407) — code input + list of public RACEs/LAPS for
+observers (joinByCode role=observer or observeRace).
+
+trail_picker_page (414) — full-screen GoogleMap + sorted trail list
+(by user distance), shows route polyline preview on selection,
+returns selected Trail.
+
+trail_checkpoints_page (411) — standalone editor for the current user's
+checkpoints on a trail; used inside the Host Laps lobby so each rider can
+configure their CPs without leaving the race.
+
+race_detail_page (408) — unified detail for host / rider / observer.
+  • Header: race name, gameType pill (LAPS=warning, RACE=primary), status.
+  • Public/Private toggle (optimistic update + revert on failure).
+  • Join-code copy chip.
+  • Map pane shown only while in_progress / completed (with rider markers
+    + trail polyline + CPs).
+  • Participants card: rows of avatar + name + role/status badge; uses
+    the versioned avatar URL from RaceParticipantDto.
+  • RACE mode tabs: Leaderboard / Lap Board (after start).
+  • LAPS mode tabs: Leaderboard (sorted by bestLapSeconds) / Lap Board /
+    My Checkpoints.
+  • LapSplitsGrid lap board with cumulative time; best-lap finish cell
+    renders `'<time>  👍'`. (No "FASTEST LAP" badge row.)
+  • Action buttons by role/status: host → Start / Stop / Cancel / Replay;
+    rider → Join / Quit / Ready / Tracking; observer → Watch / Leave.
+  • Rank list: top 3 podium grid (1-3-2 layout) on completion; ranks 4+
+    in a list with show-more toggle.
+  • "Delete my record" only removes the current user's RideRecord
+    (hiddenByOwner=true server-side); other riders still see it in replay.
+
+race_tracking_page (409) — live race screen. Polls /races/{id} and
+/races/{id}/live every 2 s. Per-rider GPS reporter every 3 s while
+preparing.
+  Marker bitmap pipeline:
+    • `_avatarBytes: Map<int, Uint8List>` and `_markerIcons:
+      Map<int, BitmapDescriptor>` keyed by userId.
+    • `_avatarUrlByUid: Map<int, String>` tracks the URL each cached
+      bitmap was built from. **When the polled URL changes (because the
+      backend bumped `?v=<updatedAt>`), drop both caches for that user
+      so the icon is rebuilt with the new avatar.**
+    • Avatars are downloaded with `Dio().get<List<int>>` (no proxy
+      override needed in production — only the static-maps Dio path
+      forces the debug proxy).
+    • `_createMarkerIcon` paints: white outer ring → coloured ring →
+      avatar image clipped to circle (or initial letter fallback) →
+      name pill below ("You" for current user, otherwise first name).
+  Lap leaderboard reuses LapSplitsGrid.
+  CP markers placed with zIndex 0; rider markers default to zIndex above.
+
+race_replay_page (415) — like ride_replay_page but multi-rider:
+  • Loads each rider's full RidePoints + laps + UserCheckpoints (when
+    trailId provided).
+  • Scrub bound to **wall-clock seconds**, not sample index.
+  • Speed labels formatted `0.25x`, `0.5x`, `1x`, `2x`, `4x`; arrows
+    increase/decrease and direction labels match.
+  • Animated ranking overlay (`_RankingRow` with implicit slide+fade).
+  • Rider marker uses real avatar via `_loadNetworkImage(url)` →
+    `ui.Image` clipped to circle; cached by URL key
+    (`_markerAvatarUrls`) so backend cache-bust regenerates the bitmap.
+  • Map panel uses fixed Expanded area so panel growth never shrinks the
+    map.
+
+my_events_page (406) — paged list of races where I'm host / rider /
+observer; tap routes to detail (or tracking when preparing/in-progress
+and I'm host or rider).
+
+================================================================================
+M22 · LapSplitsGrid Widget
+================================================================================
+lib/widgets/lap_splits_grid.dart — table-like grid:
+  • Columns: Lap | CP1 | CP2 | … | Finish.
+  • Completed laps show **cumulative** time per CP/Finish (not per-lap
+    F1 splits).
+  • In-progress lap row shows ETA for not-yet-passed CPs.
+  • Best-lap finish cell renders `'<time>  👍'` — replaces the older
+    "BEST" badge.
+  • Reverse=true reverses row order for newest-on-top in race UIs.
+
+lib/widgets/expandable_lap_row.dart — collapsible per-lap detail (used in
+ride_summary).
+
+================================================================================
+M23 · Avatar Cache Strategy (cross-cutting)
+================================================================================
+Frontend rules — no manual cache-busting needed because backend already
+appends `?v=<epoch>` (M7):
+  • Render plain network avatars with `NetworkImage(url)` /
+    `CircleAvatar(backgroundImage: NetworkImage(...))` — Flutter's
+    image cache is keyed by full URL.
+  • For map marker bitmaps (race_tracking_page, race_replay_page),
+    maintain a per-user URL fingerprint (`_avatarUrlByUid` /
+    `_markerAvatarUrls`); on change → evict bytes + bitmap and rebuild.
+  • Do **not** pass any other cache key to `NetworkImage`.
+
+================================================================================
+M24 · Static Maps & Trail Thumbnails
+================================================================================
+StaticMapUrl.forRoute encodes points into a Google polyline, requesting
+size=240x240 scale=2 with the route stroked in AppColors.primary.
+
+`loadTrailThumbnail(trailId, points)`:
+  1. Returns from process-lifetime cache if present.
+  2. Downsamples to ≤120 points (uniform stride).
+  3. Builds the URL via StaticMapUrl.
+  4. Fetches via the **debug-proxied** Dio adapter. The same
+     `IOHttpClientAdapter` block (PROXY 127.0.0.1:7897 +
+     badCertificateCallback) MUST be present in trail_thumbnail.dart,
+     trail_detail_page.dart, trail_save_page.dart, trail_record_page.dart
+     and any other file that fetches Google APIs in dev. Without it the
+     emulator/simulator will hang on Google requests.
+
+================================================================================
+M25 · Page Code Badges (debug overlay)
+================================================================================
+Every screen wraps its build() output:
+  Widget build(BuildContext c) =>
+      PageCodeBadge(code: 'NNN', child: _buildContent(c));
+
+3-digit code map:
+  100 Welcome, 101 Login, 102 CreateAccount, 200 MainShell,
+  300 Home, 400 RideHub, 401 FreeRide, 402 HostRace, 403 JoinRace,
+  404 LapTimerSetup, 405 LapTimer, 406 MyEvents, 407 ObserveRace,
+  408 RaceDetail, 409 RaceTracking, 410 HostLaps, 411 TrailCheckpoints,
+  412 RideReplay, 413 RideSummary, 414 TrailPicker, 415 RaceReplay,
+  500 Profile, 600 Garage, 601 EBikeProfile, 602 EBikeParts,
+  603 ModelPicker, 604 AvailableDevices, 605 TraxModuleInquiry,
+  700 Session, 800 Shop, 900 Trails, 901 TrailDetail,
+  902 TrailRecord, 903 TrailSave.
+
+PageCodeBadge respects a TraxStorageUtil flag toggled from Profile
+settings, hidden by default in release.
+
+================================================================================
+M26 · Free Ride / Session / Shop
+================================================================================
+free_ride_page (401) — minimal GoogleMap + start/pause/stop FAB stack
+backed by ActiveRideService.startFreeRide. On stop → RideSummaryPage.
+
+session_screen (700) — placeholder card list, themed but empty.
+
+shop_screen (800) — fetches /api/products (Product entity); renders a
+2-column grid with imageUrl + price + category badge.
+
+================================================================================
+M27 · Dev Tooling
+================================================================================
+hot_restart_all.sh:
+  #!/usr/bin/env bash
+  pgrep -f flutter_tools.snapshot | xargs -I{} kill -USR2 {}
+
+rebuild.sh — optional: `mvn -q -DskipTests package && cd trax_app &&
+flutter clean && flutter pub get`.
+
+Suggested local dev loop:
+  1. backend:  `cd backend && mvn spring-boot:run`
+  2. sims:     boot iPhone 17 / 17 Pro / Air, run
+               `cd trax_app && flutter run -d <sim_id>` for each.
+  3. iterate:  edit code → `bash hot_restart_all.sh` → verify on all sims.
+
+================================================================================
+M28 · End-to-End Self-Validation
+================================================================================
+After running M0–M27, the AI agent must verify:
+  • `cd backend && mvn -q -DskipTests compile` exits 0.
+  • Backend boots on :8080 and creates traxdb.mv.db on first run.
+  • `cd trax_app && flutter analyze` exits 0.
+  • iOS Simulator launches the app; from a cold start the user can:
+      1. Register a new account; LoginData persisted; relaunch keeps
+         the session.
+      2. Create a Bicycle with a brand/model and bind a TRAX module.
+      3. Open Trails → record a new lap-style trail using "Start Lap
+         Recording", auto-stop on returning to start; save it.
+      4. Open Trails → trail card shows a Static-Maps thumbnail.
+      5. Host a Race on that trail with another logged-in account
+         (second sim) joining via code; both see live avatar markers
+         on tracking screen.
+      6. Edit profile avatar → next live poll shows the new image
+         on every other rider's marker without manual restart
+         (proves M7+M21 cache strategy).
+      7. After race completion, RaceReplay shows scrubbable timeline
+         with all riders' real avatars; LapSplitsGrid shows cumulative
+         times and `👍` on the best lap finish cell.
+
+If any acceptance fails, re-run only the affected module's section above.
+
+================================================================================
+END
+================================================================================

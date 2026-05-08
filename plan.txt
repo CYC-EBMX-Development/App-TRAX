@@ -1,0 +1,386 @@
+================================================================================
+TRAX 应用 · Agent 执行计划（Agent Plan）
+================================================================================
+目标产物：Spring Boot 3.4 后端 + Flutter 3 移动端，构成一个完整可运行的电动
+摩托车骑行 / 计圈 / 比赛 / 回放平台。
+执行原则：按阶段（Phase）顺序推进；每个 Phase 内的 Task 可并行；每完成一个
+Phase 必须运行该阶段对应的"验收命令"，全部通过后再进入下一 Phase。
+
+================================================================================
+阶段 0 · 仓库与开发环境
+================================================================================
+任务 0.1  创建 monorepo 目录结构：/backend、/trax_app、根目录 README.md、
+          hot_restart_all.sh（pgrep flutter_tools.snapshot | xargs kill -USR2）、
+          rebuild.sh。
+任务 0.2  本机准备：JDK 17、Maven 3.9+、Flutter 3.x（Dart 3）、CocoaPods、
+          iOS Simulator；本地 HTTPS 代理 127.0.0.1:7897 用于访问 Google APIs。
+验收      backend 与 trax_app 两个子工程能各自独立打开。
+
+================================================================================
+阶段 1 · 后端基础设施
+================================================================================
+任务 1.1  pom.xml：spring-boot-starter-parent 3.4.4、starter-web/data-jpa/
+          security/validation、h2(runtime)、jjwt 0.12.6、jsoup 1.15.4。
+任务 1.2  application.yml：H2 file 数据源 (./traxdb)、H2 console、JPA
+          ddl-auto=update、静态资源映射到 backend/images/、jwt secret 与
+          expiration、google.maps.api-key。
+任务 1.3  TraxApplication 启动类。
+任务 1.4  com.trax.security：JwtUtil（HS256 generate/extract/validate）、
+          JwtAuthFilter（OncePerRequestFilter，从 SecurityContext 注入 User）。
+任务 1.5  com.trax.config：SecurityConfig（无状态、CSRF off、permitAll
+          /api/auth/**、/h2-console/**、/api/trax-modules/**、/api/bike-models/**、
+          /api/bikes/**、/images/**、/api/modules/**、/api/mock/**；其余需鉴权；
+          BCryptPasswordEncoder bean）；CorsConfig 允许全部来源；AppConfig 暴露
+          RestTemplate。
+任务 1.6  com.trax.exception.GlobalExceptionHandler：RuntimeException →
+          ApiResponse.error(40000)，Exception → 50000。
+验收      mvn -q -DskipTests compile 通过；启动后 :8080 可达，H2 console 可访问。
+
+================================================================================
+阶段 2 · 后端领域模型（JPA 实体）
+================================================================================
+任务 2.1  账户与车库：User（含 @PrePersist/@PreUpdate 维护 createdAt/updatedAt，
+          updatedAt 是头像缓存破坏的依据）、Bicycle、HistoryBicycle、BikeBrand、
+          BikeModel、TraxModule。
+任务 2.2  遥测：ModuleTelemetry、ControllerTelemetry（26 通道 VESC 字段，
+          1:1 关联 RidePoint）。
+任务 2.3  路线：Trail（type=free_ride|lap，含 start/end 坐标、deleted、
+          isPublic）、TrailPoint、UserCheckpoint（每个 user-trail 最多 4 个，
+          唯一约束 user_id+trail_id+sequence_index）。
+任务 2.4  骑行：RideRecord（status active|paused|completed；mode with_module|
+          without_module；source free_ride|lap_timer|race；hiddenByOwner）、
+          RidePoint、RideLap（rideId+lapNumber 唯一）、RideLapCheckpoint、
+          HistoryRideRecord、HistoryRidePoint。
+任务 2.5  比赛：Race（status waiting|preparing|in_progress|completed|canceled；
+          gameType RACE|LAPS；joinCode 6 位，唯一）、RaceParticipant
+          （role host|rider|observer；status joined|ready|racing|finished|dnf）。
+任务 2.6  其他：Performance、Product。
+验收      启动后表结构在 traxdb.mv.db 中自动建立。
+
+================================================================================
+阶段 3 · 后端工具与公共层
+================================================================================
+任务 3.1  com.trax.util：
+          • GeoUtils：haversineKm、pointToSegmentKm、pointToPolylineMeters、
+            projectOntoPolyline。
+          • PolylineDecoder：解码 Google encoded polyline。
+          • TrailOptimizer：速度过滤(≤100 km/h)、最小间距 3 m、异常点 50 m、
+            Douglas-Peucker ε=2 m，最后重排 sequenceIndex。
+          • LapDetector：常量 LAP_CLOSE_THRESHOLD_KM=0.05、
+            MIN_LAP_EXCURSION_KM=0.05、MIN_LAP_DISTANCE_KM=0.1。
+          • AvatarUrls：versioned(User) / versioned(url, updatedAt) — 幂等
+            追加 ?v=<epochSeconds>。
+任务 3.2  ApiResponse<T> 统一返回壳：flag/code(200|40000|50000)/message/data。
+任务 3.3  鉴权 / 用户 / 车辆 / 路线 / 比赛 / 实时 / 回放 系列 DTO，
+          每个含 fromEntity 工厂；所有头像字段必须经 AvatarUrls.versioned 输出。
+验收      mvn compile 通过；DTO 单测可序列化。
+
+================================================================================
+阶段 4 · 后端 Repository 与 Service
+================================================================================
+任务 4.1  Spring Data Repository：UserRepository.findByEmail、
+          TrailRepository.findAllByDeletedFalseAndIsPublicTrue、
+          UserCheckpointRepository.findByUser_IdAndTrail_IdOrderBySequenceIndexAsc、
+          RideLapRepository.findByRideIdOrderByLapNumberAsc、
+          RaceRepository.findByJoinCode、RaceParticipantRepository.findByUser_Id
+          等覆盖业务的查询方法。
+任务 4.2  AuthService：register、loginByPwd、resetPassword、checkEmailAvailable、
+          buildLoginData(User)。
+任务 4.3  UserService：profile、updateProfile（含上传头像到
+          backend/images/avatars/<id>.png 并写回 user.avatarUrl）。
+任务 4.4  BikeBrandService / BikeModelService / TraxModuleService / BicycleService
+          （删除车辆时归档到 HistoryBicycle）。
+任务 4.5  TrailService：createTrail（自动 TrailOptimizer + 计算距离/海拔 +
+          记录起终点）、listPublic、listMine、get、getPoints、softDelete、
+          togglePublic；UserCheckpointService 含 4 上限。
+任务 4.6  RideService（核心算法）：
+          • startRide / appendPoints / pause / resume / stopRide / deleteOwnRide
+            (hiddenByOwner=true)；
+          • 计圈算法（前端必须 1:1 镜像）：
+            起点 = 第一帧；headingUnit = 第一个距起点 ≥ 5 m 帧的单位向量；
+            finishLine = 起点的法向 ±15 m；
+            对相邻 (prev,curr) 做 segmentIntersectionParam 与 (A,B) 求交；
+            前向过滤 dot(curr-prev, headingUnit) > 0；
+            滞回：自上次过线后 maxAwayKm ≥ 0.15 且 elapsed ≥ 15 s；
+            过线时按参数 t 线性插值精确 lat/lng/altitude/timestamp，
+            写入 RideLap；
+          • 25 m 半径触发 RideLapCheckpoint。
+任务 4.7  RaceService：createRace（生成 6 位 joinCode，host 自动作为
+          participant）、list/get、joinRace、joinByCode、observeRace、quitRace、
+          setBike、updateType、startRaceEvent (→ preparing)、readyForRace、
+          goRace (→ in_progress 并为每个 rider 自动创建 source=race 的
+          RideRecord)、stopRaceEvent（finishRank：RACE 按完成圈数，LAPS 按
+          bestLapSeconds；未完成者 dnf）、cancelRaceEvent、
+          reportLocation（in_progress 时同时 append 到 ride 触发计圈）、
+          getRaceLive（组装 RaceLiveDto）。
+任务 4.8  ImageDownloadService：jsoup 抓取 Bing 图片到
+          backend/images/bikes/<BRAND>/<model>.png，失败回退占位图。
+验收      启动日志干净；OpenAPI/Postman 可走完 register→login→createRace→join
+          闭环。
+
+================================================================================
+阶段 5 · 后端 Controller
+================================================================================
+任务 5.1  Auth / User / BikeBrand / BikeModel / TraxModule / Bicycle / Trail /
+          Ride / Race 共 9 个 Controller，所有方法返回 ApiResponse<T>，路径与
+          鉴权策略与阶段 1.5 的 SecurityConfig 一致。
+任务 5.2  Race 模块新增 /report-location、/live、/my-events(分页)、/visibility、
+          /bike、/start、/stop、/cancel、/ready、/go、/join-by-code/{code}。
+验收      curl 走通核心接口；GlobalExceptionHandler 返回 ApiResponse.error。
+
+================================================================================
+阶段 6 · 后端 DataInitializer 种子数据
+================================================================================
+任务 6.1  brandRepo.count()==0 时种入：6 个品牌、约 27 个型号、6 个 TRAX 模块
+          (TRX-7A2B / 3F9C / 12DE / 4B1A / 9D5B / 8C3A)，并对全部车型尝试
+          下载图片 / 占位回退。
+任务 6.2  patchModules：每次启动补齐 TRX-9D5B、TRX-8C3A。
+任务 6.3  patchUserAvatars：把名为 Joshua / Steve / Royce 的用户头像设为
+          http://localhost:8080/images/avatars/<lower>.png。
+验收      首启即有可登录的演示账号与可挑选的品牌/型号/模块。
+
+================================================================================
+阶段 7 · 前端工程与公共层
+================================================================================
+任务 7.1  pubspec.yaml：get、dio、shared_preferences、flutter_svg、
+          flutter_smart_dialog、pinput、cached_network_image、intl、
+          google_maps_flutter、geolocator；声明 assets/images、assets/svg。
+任务 7.2  iOS Podfile platform :ios, '15.0'；Android minSdk 21、定位与前台
+          服务权限。
+任务 7.3  main.dart：启动前从 TraxStorageUtil 恢复 LoginData → 写入
+          GlobalUserInfo；GetMaterialApp + AppTheme.light + TraxRouter.routes。
+任务 7.4  theme/app_theme.dart：AppColors（primary 0xFF6A00FF 等全套）+ M3
+          ColorScheme。
+任务 7.5  common/widgets：TraxButton、TraxTextField、TraxDialog、
+          TraxRefreshButton + showTraxSnackBar、TraxOrWidget、TraxPageWidget、
+          PageCodeBadge（按 7.6 的开关显示）、BikePicker(Tile)、BikeInfoDialog、
+          ModelImageCard。
+任务 7.6  common/utils：TraxStorageUtil（token、user、selectedBikeId、
+          PageCodeBadge 开关）、TraxNavigationUtil、TraxValidatorUtil、
+          TraxDebouncer、AppRestart、kMapGestureRecognizers、
+          StaticMapUrl.forRoute、loadTrailThumbnail（≤120 点降采样 + 进程级
+          缓存 + kDebugMode 强制走 PROXY 127.0.0.1:7897 + 跳过证书校验）、
+          CpMarkerIcons.warm（半径 11·dpr，白边 2·dpr，13·dpr 粗体；zIndex 0）、
+          start_end_marker_icons、ride_checkpoints。
+任务 7.7  common/network：AppResponse<T>、AppTokenInterceptor（Bearer 头注入；
+          401 自动登出）、TraxApi（baseUrl http://localhost:8080/api，调试态
+          注入同样的 IO 代理；按阶段 5 列表暴露所有方法）。
+任务 7.8  common/global/global_user_info.dart：GetX 单例，含 id/name/email/
+          avatar 的 Rx 字段；setLogin / clear。
+任务 7.9  routers/trax_router.dart：命名路由表与跳转助手。
+验收      flutter analyze 通过；冷启动可看到欢迎页。
+
+================================================================================
+阶段 8 · 前端模型层
+================================================================================
+任务 8.1  models/*.dart：user、ebike、ebike_history、ebike_model_data、
+          bike_brand、bike_model、module_telemetry、product、trail、
+          user_checkpoint、race（含 isWaiting/isPreparing/.../isLaps/
+          isPublic 与 copyWith）、race_live_data（嵌套 RiderLiveInfo）、
+          ride_record、ride_point、ride_lap、ride_stats、tracker_result。
+          全部含 fromJson/toJson 与与后端字段名 1:1 对齐。
+验收      json 解析单元用例通过。
+
+================================================================================
+阶段 9 · 鉴权与导航 Shell
+================================================================================
+任务 9.1  features/login：welcome_page(100)、login_page(101)、
+          create_account_page(102)、LoginPageController（成功后写入
+          TraxStorageUtil 与 GlobalUserInfo，offAllNamed 到 MainScreen）。
+任务 9.2  screens/main/main_screen(200)：IndexedStack + 5 Tab 底栏
+          (Home/Trails/Garage/Session/Profile)。
+任务 9.3  screens/home/home_screen(300)：AppBar 头像绑定 GlobalUserInfo.avatar
+          (Obx + NetworkImage)；Hero CTA、快捷入口、最近骑行列表。
+任务 9.4  screens/profile/profile_screen(500)：头像编辑（multipart 上传）、
+          个人信息、My Bikes/Trails/Events 入口、设置（地图类型、PageCodeBadge
+          开关、Logout: clearAll → toWelcomeOffAll）。
+任务 9.5  screens/session/session_screen(700)、screens/shop/shop_screen(800) 占位/
+          基础列表。
+验收      可走完 注册 → 登录 → 重启保持 → 登出 闭环。
+
+================================================================================
+阶段 10 · 车库 Garage
+================================================================================
+任务 10.1 garage_screen(600) 列表 + FAB；ebike_profile_page(601) 详情含
+          Motor/Controller/Battery/Other 四张卡（与模块认证比对，命中显示对勾），
+          Bind/Unbind 模块。
+任务 10.2 ebike_parts_page(602) 部件录入；model_picker_page(603) 品牌→车型
+          两步选择；available_devices_page(604) 列出未绑定模块；
+          trax_module_inquiry_page(605) 序列号查询并绑定。
+验收      可创建车辆、绑定模块、查询模块、解绑回收。
+
+================================================================================
+阶段 11 · 路线 Trails
+================================================================================
+任务 11.1 trails_screen(900)：_TrailCard 渲染 loadTrailThumbnail、距离/海拔/
+          类型、地址（geocoded）、创建者头像；Tab 全部/我的；FAB 进录制。
+任务 11.2 trail_detail_page(901)：全屏地图 + 路线 polyline + Start/End
+          marker；CTA：Free Ride / Lap Timer / Host Race。
+任务 11.3 trail_save_page(903)：name/difficulty/type/visibility/notes；
+          POST /api/trails 携带 points 与可选 checkpoints。
+任务 11.4 trail_record_page(902)：状态机 idle|recording|paused|stopped；
+          地图类型切换、Lat,Lng 跳转条；4 种录制模式：
+          • 真实 GPS（distanceFilter:5）；
+          • Pick Location（中心十字 + Add）；
+          • Simulate Lap (Draw)：禁用地图手势，透明 GestureDetector 串行
+            await _mapController.getLatLng(...) 到 _drawChain；6 px 屏距降采样；
+            实时 polyline；Clear/Cancel/Finish；
+          • Start Lap Recording：实时 GPS + 镜像后端计圈算法（5/15/0.15/15、
+            ±15 m、forward filter、按 t 线性插值精确过线点），自动 _onStop()
+            并跳 trail_save_page；UI 顶栏提示 waiting-first-sample →
+            waiting-heading-lock → locked auto-stop armed；蓝色 Lap Start/Finish
+            标记。常量小驼峰，_haversineKm 仅一份。
+验收      flutter analyze 通过；全部模式录制 → 保存 → 列表显示缩略图。
+
+================================================================================
+阶段 12 · 计圈 Lap Timer 与免费骑行
+================================================================================
+任务 12.1 services/active_ride_service.dart：单例 ChangeNotifier，含
+          rideId/status/route/currentPos/duration/RideStats/pause；提供
+          startFreeRide、startLapTimer、appendBatch（每 5 s 上传）、
+          pause/resume/stopRide/clearCompleted。
+任务 12.2 ride_screen(400)：Free Ride / Lap Timer / Host Race / Join /
+          Watch / My Events 入口。
+任务 12.3 free_ride_page(401)：极简 GoogleMap + Start/Pause/Stop FAB；停止
+          → ride_summary_page。
+任务 12.4 lap_timer_setup_page(404)：底部 sheet 选 lap 路线（首次仅 OK，
+          再次进入有 Cancel/OK）；展示路线卡 + 我的 CP 列表（最多 4，全屏
+          十字添加）+ 目标圈数计数器 + Start。
+任务 12.5 lap_timer_page(405)：上半屏地图 + 路线 + Start marker + 编号 CP
+          marker（顶栏可隐藏）；底部 LapSplitsGrid 实时累计；in-progress CP
+          检测半径 25 m、显示闸门 30 m；圈数以服务端 RideStats.laps 为准；
+          目标达成自动跳 ride_summary_page(413)。
+任务 12.6 ride_replay_page(412)：时间轴 scrub；地图区为 Expanded，面板增长
+          不缩地图；CP 来自 ride_checkpoints。
+验收      Free Ride 与 Lap Timer 端到端可记录 / 暂停 / 完成 / 回放。
+
+================================================================================
+阶段 13 · 比赛 Race / Laps 全生命周期
+================================================================================
+任务 13.1 host_race_page(402) RACE 模式 / host_laps_page(410) LAPS 模式（
+          同表单，提交 gameType: 'LAPS'，默认 targetLaps=3）；表单含
+          name、TrailPickerPage 选路线、BikePickerTile、scheduledTime、
+          maxParticipants(2..50)、targetLaps、public 开关、notes。
+任务 13.2 join_race_page(403)：6 位 join code 输入 + 公共 RACE 列表。
+任务 13.3 observe_race_page(407)：code 输入 + 公共比赛列表（observer 角色）。
+任务 13.4 trail_picker_page(414)：全屏地图 + 按用户距离排序的路线列表，
+          选中预览 polyline，返回 Trail。
+任务 13.5 trail_checkpoints_page(411)：在 LAPS 大厅中独立编辑当前用户在该
+          路线上的 CP（最多 4），不离开比赛页。
+任务 13.6 race_detail_page(408)：host/rider/observer 三态统一详情。
+          • 头部：name、gameType pill (LAPS=warning, RACE=primary)、status；
+          • Public/Private toggle（乐观更新 + 失败回滚）；
+          • Join code 复制；
+          • in_progress / completed 时显示地图区（rider markers + trail +
+            CPs）；
+          • 参赛卡：avatar + name + role/status badge，使用版本化头像 URL；
+          • RACE Tab：Leaderboard / Lap Board；
+          • LAPS Tab：Leaderboard(按 bestLapSeconds) / Lap Board / My CPs；
+          • LapSplitsGrid 累计耗时；最佳圈终点单元渲染 "<time>  👍"；不再
+            显示 FASTEST LAP 标签行；
+          • 完赛领奖台 1-3-2 网格；4+ 名单 show-more；
+          • 角色按钮：host=Start/Stop/Cancel/Replay；rider=Join/Quit/Ready/
+            Tracking；observer=Watch/Leave；
+          • Delete my record 仅把当前用户的 RideRecord 设 hiddenByOwner=true。
+任务 13.7 race_tracking_page(409) 实时比赛：
+          • 每 2 s 轮询 /races/{id} 与 /live；preparing 阶段每 3 s 上报 GPS；
+          • Marker 缓存：_avatarBytes、_markerIcons 按 userId；
+            _avatarUrlByUid 跟踪当时的 URL。当后端 ?v= 变化 → 同时驱逐字节与
+            位图，下次轮询重建（驱动头像热更新）；
+          • _createMarkerIcon：白外环 → 彩色环 → 头像剪裁圆形（无图回退首字
+            母）→ 名字 pill（自己显示 "You"，否则取 first name）；
+          • Lap 排行复用 LapSplitsGrid；CP marker zIndex 0，rider 在其上。
+任务 13.8 race_replay_page(415) 多人回放：
+          • 抓取每个 rider 的 RidePoints + laps + Trail CP；
+          • scrub 绑墙钟秒（不绑帧索引）；
+          • 速度档：0.25× / 0.5× / 1× / 2× / 4×（方向与标签匹配）；
+          • 动画排名 overlay（_RankingRow 隐式 slide+fade）；
+          • Marker 用 _loadNetworkImage(url) → ui.Image 圆形剪裁；
+            _markerAvatarUrls 按 URL key 缓存，URL 变化即重建；
+          • 地图区固定 Expanded。
+任务 13.9 my_events_page(406)：分页列表（host/rider/observer 全部）；
+          preparing/in_progress 且我是 host/rider 时直跳 tracking，否则跳详情。
+验收      双模拟器：A host、B join code 加入 → preparing ready → go →
+          tracking 双方实时 → completed → replay 看到双方真实头像。
+
+================================================================================
+阶段 14 · LapSplitsGrid 与 ExpandableLapRow
+================================================================================
+任务 14.1 widgets/lap_splits_grid.dart：列 Lap | CP1 | … | Finish；已完成
+          圈显示累计时间；进行中圈显示 ETA；最佳圈终点 "<time>  👍"；
+          reverse 控制行顺序。
+任务 14.2 widgets/expandable_lap_row.dart：用于 ride_summary 的可折叠详情。
+验收      与 lap_timer / race_detail / race_tracking / replay 显示一致。
+
+================================================================================
+阶段 15 · 头像缓存与 Static Maps 代理（横切）
+================================================================================
+任务 15.1 后端：所有发出头像 URL 的 DTO 必须经 AvatarUrls.versioned —
+          AuthService.buildLoginData、RaceParticipantDto.fromEntity、
+          RaceDto.fromEntity（hostAvatarUrl）、RaceLiveDto.RiderLiveInfo、
+          以及 TrailDto.creator（如暴露）。
+任务 15.2 前端：普通头像直接 NetworkImage(url)；Map marker bitmap 维护
+          per-user URL 指纹（race_tracking、race_replay）；URL 变化即驱逐字节
+          与位图重建；不要再叠加任何自定义 cacheKey。
+任务 15.3 调试代理：trail_thumbnail.dart 与所有访问 Google APIs 的 Dio 实例
+          在 kDebugMode 注入 IOHttpClientAdapter 的 PROXY 127.0.0.1:7897 +
+          badCertificateCallback。否则模拟器会卡住。
+验收      A 改头像 → B 下次轮询 marker 头像即时更新；trails_screen 缩略图
+          稳定加载。
+
+================================================================================
+阶段 16 · PageCodeBadge 调试覆盖
+================================================================================
+任务 16.1 每个屏幕：build() 返回
+          PageCodeBadge(code: 'NNN', child: _buildContent(c))。
+任务 16.2 三位 code 映射（与代码一致）：
+          100 Welcome / 101 Login / 102 CreateAccount / 200 MainShell /
+          300 Home / 400 RideHub / 401 FreeRide / 402 HostRace /
+          403 JoinRace / 404 LapTimerSetup / 405 LapTimer / 406 MyEvents /
+          407 ObserveRace / 408 RaceDetail / 409 RaceTracking /
+          410 HostLaps / 411 TrailCheckpoints / 412 RideReplay /
+          413 RideSummary / 414 TrailPicker / 415 RaceReplay /
+          500 Profile / 600 Garage / 601 EBikeProfile / 602 EBikeParts /
+          603 ModelPicker / 604 AvailableDevices / 605 TraxModuleInquiry /
+          700 Session / 800 Shop / 900 Trails / 901 TrailDetail /
+          902 TrailRecord / 903 TrailSave。
+任务 16.3 受 TraxStorageUtil 开关控制（Profile 设置中切换），release 默认隐藏。
+验收      开关后所有屏幕角标显示一致。
+
+================================================================================
+阶段 17 · 开发流与脚本
+================================================================================
+任务 17.1 hot_restart_all.sh：
+          #!/usr/bin/env bash
+          pgrep -f flutter_tools.snapshot | xargs -I{} kill -USR2 {}
+任务 17.2 rebuild.sh：mvn -q -DskipTests package && cd trax_app &&
+          flutter clean && flutter pub get。
+任务 17.3 标准本地循环：
+          ① cd backend && mvn spring-boot:run
+          ② 启动 iPhone 17 / 17 Pro / Air 三个模拟器，分别 flutter run
+          ③ 修改后 bash hot_restart_all.sh 一次同步三个端
+验收      改动后三机同步刷新。
+
+================================================================================
+阶段 18 · 端到端自校验
+================================================================================
+按顺序检查并全部通过后视为完成：
+  1. cd backend && mvn -q -DskipTests compile 退出码 0；
+  2. backend 启动监听 :8080；首次创建 traxdb.mv.db；
+  3. cd trax_app && flutter analyze 退出码 0；
+  4. 模拟器冷启动，可完成：
+     a. 注册 → 登录 → 杀进程后再开仍是登录态；
+     b. 创建一辆 Bicycle，绑定品牌/车型与 TRAX 模块；
+     c. 在 Trails 用 "Start Lap Recording" 录一条 lap 路线，回到起点自动
+        停止 → 保存；
+     d. 列表卡片显示 Static Maps 缩略图；
+     e. 同账号 host 一场 Race，第二台模拟器以另一账号 join code 加入，
+        双方在 tracking 看到对方头像 marker；
+     f. 在 Profile 修改自己头像 → 下次 live 轮询所有人 marker 即时更新；
+     g. 比赛结束打开 Replay：scrub 时间轴显示双方真实头像；LapSplitsGrid
+        终点格在最佳圈显示 "<time>  👍"。
+任意失败 → 回到对应阶段重做该任务后再次自校验。
+
+================================================================================
+完
+================================================================================

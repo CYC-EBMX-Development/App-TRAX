@@ -1,0 +1,38 @@
+spring:
+  application:
+    name: trax-backend
+  datasource:
+    url: jdbc:h2:file:./traxdb
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+  sql:
+    init:
+      mode: never
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    database-platform: org.hibernate.dialect.H2Dialect
+  web:
+    resources:
+      static-locations: classpath:/static/,file:/Users/cyc_joshua/Documents/CYC/TRAX/App-TRAX/backend/images/
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 10MB
+
+server:
+  port: 8080
+
+jwt:
+  secret: trax-secret-key-for-jwt-token-generation-min-256-bits-long-key
+  expiration: 86400000
+
+google:
+  maps:
+    api-key: AIzaSyDmzdgVvZu4f5Q7zCKytQ5Syz0RLQzUxng

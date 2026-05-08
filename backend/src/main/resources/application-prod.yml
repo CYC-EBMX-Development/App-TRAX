@@ -1,0 +1,57 @@
+spring:
+  application:
+    name: trax-backend
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/${MYSQL_DB:trax}?useSSL=false&useUnicode=true&characterEncoding=UTF-8&connectionCollation=utf8mb4_0900_ai_ci&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: ${MYSQL_USER:trax_app}
+    password: ${MYSQL_PWD}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+  h2:
+    console:
+      enabled: false
+  sql:
+    init:
+      mode: never
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate.dialect: org.hibernate.dialect.MySQL8Dialect
+      hibernate.jdbc.batch_size: 50
+      hibernate.order_inserts: true
+      hibernate.order_updates: true
+  web:
+    resources:
+      static-locations: classpath:/static/,file:/var/lib/trax/images/
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 20MB
+
+server:
+  port: 8080
+  address: 127.0.0.1
+  forward-headers-strategy: framework
+  tomcat:
+    max-swallow-size: 20MB
+    max-http-form-post-size: 20MB
+
+jwt:
+  secret: ${JWT_SECRET}
+  expiration: 86400000
+
+google:
+  maps:
+    api-key: ${GMAPS_KEY}
+
+logging:
+  file:
+    name: /var/log/trax/trax-backend.log
+  level:
+    root: INFO
+    com.trax: INFO

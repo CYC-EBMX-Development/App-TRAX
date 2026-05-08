@@ -1,0 +1,9 @@
+2026-04-20 16:36:29.007349+08:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "TRAILS" not found (this database is empty); SQL statement:
+ALTER TABLE trails ALTER COLUMN ebike_accessible SET NULL [42104-232]
+2026-04-20 16:36:29.010600+08:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "TRAILS" not found (this database is empty); SQL statement:
+ ALTER TABLE trails ALTER COLUMN ebike_accessible SET DEFAULT NULL [42104-232]
+2026-04-20 17:36:03.811640+08:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "USERS" not found (this database is empty); SQL statement:
+SELECT id, email, username FROM USERS [42104-232]
