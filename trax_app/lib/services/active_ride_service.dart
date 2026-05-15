@@ -8,6 +8,7 @@ import '../models/ride_stats.dart';
 import '../models/ride_point.dart';
 import '../models/module_telemetry.dart';
 import '../common/network/trax_api.dart';
+import '../common/services/gps_interval_settings.dart';
 
 class ActiveRideService extends ChangeNotifier {
   ActiveRideService._();
@@ -35,15 +36,38 @@ class ActiveRideService extends ChangeNotifier {
   LatLng? _anchorEnd;
 
   // ── Adaptive sampling state ─────────────────────────
-  static const int _kBaseIntervalMs = 1000;
-  static const int _kFastIntervalMs = 100;
+  // Base cadence is user-configurable via Profile → Settings
+  // (GpsIntervalSettings). Near a lap boundary the stream re-subscribes
+  // at [_kFastIntervalMs] for higher precision; the fast rate is never
+  // slower than the configured base.
+  int get _kBaseIntervalMs => GpsIntervalSettings.baseIntervalMs;
+  int get _kFastIntervalMs =>
+      GpsIntervalSettings.baseIntervalMs < 100 ? GpsIntervalSettings.baseIntervalMs : 100;
   static const double _kFastSampleRadiusM = 10.0;
-  int _currentIntervalMs = _kBaseIntervalMs;
+  int _currentIntervalMs = GpsIntervalSettings.baseIntervalMs;
   Timer? _samplingPollTimer;  // Last observed distance to each anchor (metres). Used to detect whether
   // the rider is *approaching* the anchor (distance shrinking) so the
   // 100 ms cadence only kicks in on the way IN — not while leaving.
   double? _lastDistToStartM;
   double? _lastDistToEndM;
+  // Timestamp of the last fix accepted by [_onGpsFix]. Used on iOS /
+  // macOS to throttle Core Location's free-running stream down to the
+  // requested [_currentIntervalMs] cadence.
+  DateTime? _lastAcceptedFixAt;
+
+  // ── GPS quality filters ──────────────────────────────
+  // Drop fixes whose reported horizontal accuracy is worse than this
+  // many metres (i.e. 30 m+ of estimated error). Most modern phones
+  // report 3–10 m in the open and 20–40 m in dense urban canyons; the
+  // 30 m threshold catches the worst urban-canyon multi-path noise
+  // without throwing away normal samples.
+  static const double _kMaxAccuracyM = 30.0;
+  // Reject “teleport” fixes whose implied speed since the previous
+  // accepted fix exceeds this many km/h. This catches sudden GPS jumps
+  // that physically cannot happen on a bike. Two consecutive jump fixes
+  // override the filter (in case the rider really did move).
+  static const double _kMaxJumpKmh = 100.0;
+  int _consecutiveJumpDrops = 0;
   // Timers
   Timer? _statsTimer;
   Timer? _telemetryTimer;
@@ -158,6 +182,7 @@ class ActiveRideService extends ChangeNotifier {
 
   void _startPhoneGps() {
     _currentIntervalMs = _kBaseIntervalMs;
+    _lastAcceptedFixAt = null;
     _geoSub = Geolocator.getPositionStream(
       locationSettings: _buildLocationSettings(_kBaseIntervalMs),
     ).listen(_onGpsFix);
@@ -174,6 +199,51 @@ class ActiveRideService extends ChangeNotifier {
   }
 
   void _onGpsFix(Position pos) {
+    // 1) Accuracy filter — reject low-confidence fixes.
+    if (pos.accuracy.isFinite && pos.accuracy > _kMaxAccuracyM) {
+      return;
+    }
+    // 2) Jump filter — reject implausible position jumps that imply
+    //    speeds above [_kMaxJumpKmh]. Two such fixes in a row override
+    //    the filter so a genuine large move can still be recorded.
+    if (route.isNotEmpty && _lastAcceptedFixAt != null) {
+      final last = route.last;
+      final dtMs =
+          DateTime.now().difference(_lastAcceptedFixAt!).inMilliseconds;
+      if (dtMs > 0) {
+        final dM = _haversineMeters(last, LatLng(pos.latitude, pos.longitude));
+        final implKmh = (dM / dtMs) * 3600.0; // m/ms * 1000 ms/s * 3.6 km/h
+        if (implKmh > _kMaxJumpKmh) {
+          if (_consecutiveJumpDrops < 2) {
+            _consecutiveJumpDrops++;
+            return;
+          }
+          // Two jumps in a row — trust this one and reset the counter.
+        }
+      }
+    }
+    _consecutiveJumpDrops = 0;
+
+    // iOS / macOS Core Location is event-driven — there's no
+    // [intervalDuration] to clamp the delivery rate. When the user picks
+    // a slow base cadence (e.g. 1 s) but the hardware delivers 5–10 Hz,
+    // we drop intermediate fixes here so the recorded cadence matches
+    // the requested [_currentIntervalMs] across all platforms. Android
+    // already throttles in the OS via `intervalDuration`, so this
+    // throttle is effectively a no-op on Android.
+    if (defaultTargetPlatform == TargetPlatform.iOS ||
+        defaultTargetPlatform == TargetPlatform.macOS) {
+      final last = _lastAcceptedFixAt;
+      if (last != null) {
+        // Allow ~10 % jitter so we don't reject a fix arriving 1 ms early.
+        final minGap = (_currentIntervalMs * 0.9).round();
+        if (DateTime.now().difference(last).inMilliseconds < minGap) {
+          return;
+        }
+      }
+      _lastAcceptedFixAt = DateTime.now();
+    }
+
     final latlng = LatLng(pos.latitude, pos.longitude);
     _pendingPoints.add(RidePoint(
       latitude: pos.latitude,
@@ -208,8 +278,14 @@ class ActiveRideService extends ChangeNotifier {
     }
     if (defaultTargetPlatform == TargetPlatform.iOS ||
         defaultTargetPlatform == TargetPlatform.macOS) {
+      // iOS Core Location does not honour a fixed interval. To get
+      // sub-second updates we must request `bestForNavigation`
+      // (hardware delivers up to ~10 Hz on modern iPhones); plain
+      // `high`/`best` cap around 1 Hz which is why earlier rides ended
+      // up logged at ≈1 s spacing despite a 100 ms preference. The
+      // requested cadence is enforced client-side in [_onGpsFix].
       return AppleSettings(
-        accuracy: LocationAccuracy.high,
+        accuracy: LocationAccuracy.bestForNavigation,
         distanceFilter: 0,
         allowBackgroundLocationUpdates: true,
         showBackgroundLocationIndicator: true,
@@ -269,6 +345,7 @@ class ActiveRideService extends ChangeNotifier {
     }
     if (desiredMs == _currentIntervalMs) return;
     _currentIntervalMs = desiredMs;
+    _lastAcceptedFixAt = null;
     if (_mode != 'without_module') return; // module mode doesn't use phone GPS
     _geoSub?.cancel();
     _geoSub = Geolocator.getPositionStream(

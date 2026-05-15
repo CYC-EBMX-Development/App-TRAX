@@ -7,7 +7,8 @@ class Trail {
   final String? description;
   final String? imageUrl;
   final double? distance; // km
-  final double? elevation; // meters
+  final double? elevation; // meters (cumulative gain)
+  final double? elevationDiff; // meters (max altitude - min altitude)
   final String? type; // free_ride, lap
   final int? creatorId;
   final String? creatorName;
@@ -28,6 +29,7 @@ class Trail {
     this.imageUrl,
     this.distance,
     this.elevation,
+    this.elevationDiff,
     this.type,
     this.creatorId,
     this.creatorName,
@@ -50,6 +52,7 @@ class Trail {
       imageUrl: json['imageUrl'],
       distance: (json['distance'] as num?)?.toDouble(),
       elevation: (json['elevation'] as num?)?.toDouble(),
+      elevationDiff: (json['elevationDiff'] as num?)?.toDouble(),
       type: json['type'],
       creatorId: (json['creatorId'] as num?)?.toInt(),
       creatorName: json['creatorName'],
@@ -72,6 +75,7 @@ class Trail {
         'imageUrl': imageUrl,
         'distance': distance,
         'elevation': elevation,
+        'elevationDiff': elevationDiff,
         'type': type,
         'creatorId': creatorId,
         'creatorName': creatorName,

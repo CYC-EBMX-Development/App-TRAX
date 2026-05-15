@@ -83,24 +83,8 @@ class LoginPage extends GetView<LoginPageController> {
                 overlayColor: const Color(0xFFF8C645),
                 onPressed: () => controller.login(),
               ),
-              const SizedBox(height: 15),
-              const TraxOrWidget(color: Color(0xFF878787)),
-              const SizedBox(height: 16),
-              if (GetPlatform.isAndroid)
-                LoginWithButton(
-                  type: LoginButtonType.google,
-                  onSuccess: (model) => controller.loginSuccess(model),
-                )
-              else if (GetPlatform.isIOS)
-                LoginWithButton(
-                  type: LoginButtonType.apple,
-                  onSuccess: (model) => controller.loginSuccess(model),
-                ),
-              const SizedBox(height: 10),
-              LoginWithButton(
-                type: LoginButtonType.facebook,
-                onSuccess: (model) => controller.loginSuccess(model),
-              ),
+              // Third-party login buttons (Google / Apple / Facebook) are
+              // hidden for now; will be re-enabled later.
               const SizedBox(height: 10),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,

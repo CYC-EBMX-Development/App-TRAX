@@ -45,20 +45,19 @@ class CreateAccountController extends GetxController {
       return;
     }
 
-    TraxRouter.toCreatePwdPage(emailController.text, (pwd) {
-      TraxRouter.toVerificationPage(emailController.text, (code) async {
-        final result = await TraxApi.registerByPwd(
-          email: emailController.text,
-          password: pwd,
-          verificationCode: code,
-        );
-        if (!result.isSuccess()) {
-          TraxDialog.messageTopDialog(result.message, result.flag);
-          return;
-        }
-        TraxDialog.messageTopDialog('Sign up successful', true);
-        TraxRouter.toLoginPageOffAll();
-      });
+    TraxRouter.toCreatePwdPage(emailController.text, (pwd) async {
+      // Verification step temporarily hidden — register directly after password.
+      final result = await TraxApi.registerByPwd(
+        email: emailController.text,
+        password: pwd,
+        verificationCode: '',
+      );
+      if (!result.isSuccess()) {
+        TraxDialog.messageTopDialog(result.message, result.flag);
+        return;
+      }
+      TraxDialog.messageTopDialog('Sign up successful', true);
+      TraxRouter.toLoginPageOffAll();
     });
   }
 }
@@ -80,22 +79,8 @@ class CreateAccountPage extends GetView<CreateAccountController> {
           children: [
             const Text('Create an Account', style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold)),
             const SizedBox(height: 50),
-            if (GetPlatform.isAndroid)
-              LoginWithButton(
-                type: LoginButtonType.google,
-                onSuccess: (model) => Get.find<LoginPageController>().loginSuccess(model),
-              )
-            else if (GetPlatform.isIOS)
-              LoginWithButton(
-                type: LoginButtonType.apple,
-                onSuccess: (model) => Get.find<LoginPageController>().loginSuccess(model),
-              ),
-            const SizedBox(height: 10),
-            LoginWithButton(
-              type: LoginButtonType.facebook,
-              onSuccess: (model) => Get.find<LoginPageController>().loginSuccess(model),
-            ),
-            const Padding(padding: EdgeInsets.only(top: 20, bottom: 30), child: TraxOrWidget()),
+            // Third-party sign-up buttons (Google / Apple / Facebook) are
+            // hidden for now; will be re-enabled later.
             Form(
               key: controller.formKey,
               child: TraxTextField(

@@ -6,6 +6,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../../common/utils/map_gesture_recognizers.dart';
 import '../../common/utils/cp_marker_icons.dart';
+import '../../common/utils/start_end_marker_icons.dart';
 import '../../common/utils/ride_checkpoints.dart';
 
 import '../../common/network/trax_api.dart';
@@ -204,6 +205,42 @@ class _RaceReplayPageState extends State<RaceReplayPage> {
       _loading = false;
     });
     _ensureMarkerIcons();
+    _fitReplayBounds();
+  }
+
+  /// Fit the camera so the entire replay (all rider routes + checkpoints)
+  /// fits on screen. Called once on map ready and again once rider data
+  /// finishes loading (whichever happens last).
+  void _fitReplayBounds() {
+    if (!_mapReady || _mapController == null) return;
+    final pts = <LatLng>[
+      for (final r in _riders) ...r.route,
+      for (final cp in _trailCheckpoints) LatLng(cp.latitude, cp.longitude),
+    ];
+    if (pts.isEmpty) return;
+    if (pts.length == 1) {
+      _mapController!.animateCamera(
+        CameraUpdate.newLatLngZoom(pts.first, 16),
+      );
+      return;
+    }
+    double minLat = pts.first.latitude, maxLat = pts.first.latitude;
+    double minLng = pts.first.longitude, maxLng = pts.first.longitude;
+    for (final p in pts) {
+      if (p.latitude < minLat) minLat = p.latitude;
+      if (p.latitude > maxLat) maxLat = p.latitude;
+      if (p.longitude < minLng) minLng = p.longitude;
+      if (p.longitude > maxLng) maxLng = p.longitude;
+    }
+    _mapController!.animateCamera(
+      CameraUpdate.newLatLngBounds(
+        LatLngBounds(
+          southwest: LatLng(minLat, minLng),
+          northeast: LatLng(maxLat, maxLng),
+        ),
+        60,
+      ),
+    );
   }
 
   int? get _myId => GlobalUserInfo.instance.id.value;
@@ -548,6 +585,23 @@ class _RaceReplayPageState extends State<RaceReplayPage> {
       cpAgg,
       onWarmed: () { if (mounted) setState(() {}); },
     ));
+    // Start / finish marker: first point of any rider's route.
+    final startPos = _riders
+        .map((r) => r.route.isNotEmpty ? r.route.first : null)
+        .whereType<LatLng>()
+        .firstOrNull;
+    if (startPos != null) {
+      set.add(
+        Marker(
+          markerId: const MarkerId('start_finish'),
+          position: startPos,
+          icon: StartEndMarkerIcons.start,
+          anchor: const Offset(0.5, 0.5),
+          zIndex: 5,
+          infoWindow: const InfoWindow(title: 'Start / Finish'),
+        ),
+      );
+    }
     for (final r in _riders) {
       if (!(_visibility[r.rider.userId] ?? true)) continue;
       final pos = _currentPos(r);
@@ -783,6 +837,7 @@ class _RaceReplayPageState extends State<RaceReplayPage> {
                   onMapCreated: (c) {
                     _mapController = c;
                     _mapReady = true;
+                    _fitReplayBounds();
                   },
                 ),
                 Positioned(

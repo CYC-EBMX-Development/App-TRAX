@@ -6,7 +6,7 @@ import '../../common/widgets/trax_refresh_button.dart';
 import '../../models/race.dart';
 import '../../theme/app_theme.dart';
 import 'race_detail_page.dart';
-import 'race_tracking_page.dart';
+import '../../common/widgets/map_router.dart';
 import 'package:trax_app/common/widgets/page_code_badge.dart';
 
 class MyEventsPage extends StatefulWidget {
@@ -72,7 +72,8 @@ class _MyEventsPageState extends State<MyEventsPage> {
           ? const Center(child: Text('No events yet', style: TextStyle(color: AppColors.textSecondary, fontSize: 15)))
           : ListView.builder(
               controller: _scrollCtrl,
-              padding: const EdgeInsets.all(16),
+              padding: EdgeInsets.fromLTRB(
+                  16, 16, 16, 16 + MediaQuery.of(context).padding.bottom),
               itemCount: _events.length + (_loading ? 1 : 0),
               itemBuilder: (ctx, i) {
                 if (i >= _events.length) {
@@ -121,9 +122,7 @@ class _MyEventsPageState extends State<MyEventsPage> {
     return GestureDetector(
       onTap: () {
         if (race.isPreparing && (race.isHost || race.isRider)) {
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => RaceTrackingPage(raceId: race.id)),
-          );
+          MapRouter.openRaceTracking(context, raceId: race.id);
         } else {
           Navigator.of(context).push(
             MaterialPageRoute(builder: (_) => RaceDetailPage(raceId: race.id)),

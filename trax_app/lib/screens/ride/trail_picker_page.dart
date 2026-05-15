@@ -2,10 +2,9 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
-import '../../common/utils/map_gesture_recognizers.dart';
-import '../../common/utils/start_end_marker_icons.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart' show LatLng;
 import '../../common/utils/trail_thumbnail.dart';
+import '../../common/widgets/route_preview_map.dart';
 
 import '../../common/network/trax_api.dart';
 import '../../models/trail.dart';
@@ -34,7 +33,6 @@ class _TrailPickerPageState extends State<TrailPickerPage> {
   Trail? _selected;
   List<LatLng> _route = [];
   bool _loadingRoute = false;
-  GoogleMapController? _mapController;
   late List<Trail> _sorted;
 
   static const LatLng _defaultPos = LatLng(22.89810, 113.86990);
@@ -91,34 +89,6 @@ class _TrailPickerPageState extends State<TrailPickerPage> {
       _route = route;
       _loadingRoute = false;
     });
-
-    _animateToTrail(t, route);
-  }
-
-  void _animateToTrail(Trail t, List<LatLng> route) {
-    if (_mapController == null) return;
-
-    if (route.length >= 2) {
-      double minLat = route.first.latitude, maxLat = route.first.latitude;
-      double minLng = route.first.longitude, maxLng = route.first.longitude;
-      for (final p in route) {
-        if (p.latitude < minLat) minLat = p.latitude;
-        if (p.latitude > maxLat) maxLat = p.latitude;
-        if (p.longitude < minLng) minLng = p.longitude;
-        if (p.longitude > maxLng) maxLng = p.longitude;
-      }
-      _mapController!.animateCamera(CameraUpdate.newLatLngBounds(
-        LatLngBounds(
-          southwest: LatLng(minLat, minLng),
-          northeast: LatLng(maxLat, maxLng),
-        ),
-        60,
-      ));
-    } else if (t.startLatitude != null && t.startLongitude != null) {
-      _mapController!.animateCamera(
-        CameraUpdate.newLatLngZoom(LatLng(t.startLatitude!, t.startLongitude!), 15),
-      );
-    }
   }
 
   void _onTrailTap(Trail t) {
@@ -170,38 +140,19 @@ class _TrailPickerPageState extends State<TrailPickerPage> {
             flex: 5,
             child: Stack(
               children: [
-                GoogleMap(
-                  initialCameraPosition: CameraPosition(target: _initialTarget, zoom: 14),
+                RoutePreviewMap(
+                  route: _route.isNotEmpty
+                      ? _route
+                      : (_selected?.startLatitude != null &&
+                              _selected?.startLongitude != null)
+                          ? [
+                              LatLng(_selected!.startLatitude!,
+                                  _selected!.startLongitude!)
+                            ]
+                          : const [],
+                  showStart: true,
+                  showFinish: false,
                   myLocationEnabled: true,
-                  myLocationButtonEnabled: false,
-                  zoomControlsEnabled: false,
-                  gestureRecognizers: kMapGestureRecognizers,
-                  polylines: _route.length >= 2
-                      ? {
-                          Polyline(
-                            polylineId: const PolylineId('trail'),
-                            points: _route,
-                            color: AppColors.primary,
-                            width: 4,
-                          ),
-                        }
-                      : {},
-                  markers: {
-                    if (_route.isNotEmpty)
-                      Marker(
-                        markerId: const MarkerId('start'),
-                        position: _route.first,
-                        icon: StartEndMarkerIcons.start,
-                      ),
-                  },
-                  onMapCreated: (c) {
-                    _mapController = c;
-                    if (_selected != null && _route.isNotEmpty) {
-                      Future.delayed(const Duration(milliseconds: 300), () {
-                        _animateToTrail(_selected!, _route);
-                      });
-                    }
-                  },
                 ),
                 if (_loadingRoute)
                   const Positioned(
@@ -293,7 +244,11 @@ class _TrailPickerPageState extends State<TrailPickerPage> {
                     child: _sorted.isEmpty
                         ? const Center(child: Text('No lap trails available', style: TextStyle(color: AppColors.textSecondary)))
                         : ListView.separated(
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            padding: EdgeInsets.fromLTRB(
+                                16,
+                                0,
+                                16,
+                                MediaQuery.of(context).padding.bottom + 16),
                             itemCount: _sorted.length,
                             separatorBuilder: (_, __) => const SizedBox(height: 8),
                             itemBuilder: (_, i) {
@@ -473,7 +428,7 @@ class _TrailPickerItemState extends State<_TrailPickerItem> {
       if (mounted) setState(() => _thumbFailed = true);
       return;
     }
-    final result = await loadTrailThumbnail(id);
+    final result = await loadTrailThumbnail(id, serverImageUrl: widget.trail.imageUrl);
     if (!mounted) return;
     if (result.bytes != null) {
       setState(() => _thumbBytes = result.bytes);

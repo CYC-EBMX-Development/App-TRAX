@@ -16,7 +16,8 @@ APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT_DIR="$APP_ROOT/build/dist"
 mkdir -p "$OUT_DIR"
 
-API_BASE_URL="${API_BASE_URL:-http://43.153.210.122/api}"
+API_BASE_URL="${API_BASE_URL:-http://43.99.48.204/api}"
+AMAP_KEY="${AMAP_KEY:-}"
 DEPLOY=false
 [[ "${1:-}" == "--deploy" ]] && DEPLOY=true
 
@@ -50,11 +51,15 @@ APK_OUT="$OUT_DIR/$APK_NAME"
 echo "==> Building $APK_NAME (API_BASE_URL=$API_BASE_URL)"
 
 cd "$APP_ROOT"
+"$APP_ROOT/scripts/patch_amap_plugins.sh" || true
 env -u FLUTTER_STORAGE_BASE_URL -u PUB_HOSTED_URL \
     FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn \
     PUB_HOSTED_URL=https://pub.flutter-io.cn \
     flutter build apk --release \
       --dart-define=API_BASE_URL="$API_BASE_URL" \
+      --dart-define=AMAP_KEY="$AMAP_KEY" \
+      --dart-define=AMAP_ANDROID_SDK_KEY="${AMAP_ANDROID_SDK_KEY:-}" \
+      --dart-define=AMAP_IOS_SDK_KEY="${AMAP_IOS_SDK_KEY:-}" \
       --build-name="${DATE_STAMP}.${SEQ}" \
       --build-number="$(date +%s)"
 
@@ -74,17 +79,20 @@ rsync -avP --partial --inplace \
   "$APK_OUT" "ubuntu@$SERVER_IP:/var/www/trax-download/$APK_NAME"
 
 echo "==> Updating /var/www/trax-download/trax-latest.apk symlink and version.json"
+SIZE_MB=$(( ($(stat -f%z "$APK_OUT") + 524288) / 1048576 ))
+LATEST_CODE="${DATE_STAMP}-${SEQ}"
+RELEASED_AT="$(TZ=Asia/Shanghai date -Iseconds)"
 ssh -i "$SSH_KEY" "ubuntu@$SERVER_IP" "
   cd /var/www/trax-download &&
   sudo ln -sfn '$APK_NAME' trax-latest.apk &&
-  printf '{\"file\":\"%s\",\"size\":%s,\"sha1\":\"%s\",\"built_at\":\"%s\"}\n' \
-    '$APK_NAME' '$(stat -f%z "$APK_OUT")' '$SHA1' '$(TZ=Asia/Shanghai date -Iseconds)' \
+  printf '{\"latest\":\"%s\",\"filename\":\"%s\",\"url\":\"%s\",\"sha1\":\"%s\",\"size_mb\":%s,\"released_at\":\"%s\"}\n' \
+    '$LATEST_CODE' '$APK_NAME' '/apk/$APK_NAME' '$SHA1' '$SIZE_MB' '$RELEASED_AT' \
     | sudo tee version.json > /dev/null &&
   ls -lh '$APK_NAME' trax-latest.apk version.json
 "
 
 echo
 echo "==> Done. URLs:"
-echo "    Page : http://43.153.210.122/download/"
-echo "    APK  : http://43.153.210.122/apk/$APK_NAME"
-echo "    Latest: http://43.153.210.122/apk/trax-latest.apk"
+echo "    Page : http://43.99.48.204/download/"
+echo "    APK  : http://43.99.48.204/apk/$APK_NAME"
+echo "    Latest: http://43.99.48.204/apk/trax-latest.apk"

@@ -1,8 +1,12 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../../common/global/global_user_info.dart';
 import '../../common/network/trax_api.dart';
+import '../../common/services/app_update_service.dart';
+import '../../common/services/gps_interval_settings.dart';
 import '../../common/utils/trax_storage_util.dart';
 import '../../common/widgets/trax_refresh_button.dart';
 import '../../models/ebike.dart';
@@ -26,11 +30,180 @@ class _ProfileScreenState extends State<ProfileScreen> {
   List<RideRecord> _rides = [];
   List<EBike> _bikes = [];
   int _rewardPoints = 0;
+  AppUpdateStatus? _updateStatus;
 
   @override
   void initState() {
     super.initState();
     _loadAll();
+    _checkForUpdate();
+    // Opening the Profile counts as "user has seen the update".
+    AppUpdateService.instance.markUpdateSeen();
+  }
+
+  Future<void> _checkForUpdate() async {
+    final s = await AppUpdateService.instance.checkForUpdate();
+    if (mounted) setState(() => _updateStatus = s);
+  }
+
+  String _versionTileSubtitle() {
+    final s = _updateStatus;
+    if (s == null) return 'Checking…';
+    if (s.hasUpdate) {
+      final code = s.release!.latestCode;
+      return '${s.displayCurrent} → $code';
+    }
+    return s.displayCurrent;
+  }
+
+  Future<void> _onTapVersionTile() async {
+    final s = _updateStatus;
+    if (s == null) {
+      await _checkForUpdate();
+      return;
+    }
+    if (!s.hasUpdate) {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('App Version'),
+          content: Text(
+              'You are on the latest version.\n\nCurrent: ${s.displayCurrent}'
+              '${s.release != null ? "\nServer:  ${s.release!.latestCode}" : ""}'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('OK'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.pop(ctx);
+                setState(() => _updateStatus = null);
+                await _checkForUpdate();
+              },
+              child: const Text('Check Again'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+    await _showUpdateDialog(s.release!);
+  }
+
+  Future<void> _showUpdateDialog(AppReleaseInfo release) async {
+    // iOS distributes via TestFlight; we cannot side-load an IPA, so just
+    // tell the user to open TestFlight and update from there.
+    if (Platform.isIOS) {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Update Available'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                  'A new version is available on TestFlight.\n\n'
+                  'Please open the TestFlight app to update to the latest build.',
+                  style: TextStyle(fontSize: 14)),
+              const SizedBox(height: 12),
+              Text('Latest:   ${release.latestCode}',
+                  style: const TextStyle(fontSize: 13)),
+              if (release.releasedAt.isNotEmpty)
+                Text('Released: ${release.releasedAt}',
+                    style: const TextStyle(fontSize: 12)),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Got it'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Update Available'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('A new version is ready to install.',
+                style: const TextStyle(fontSize: 14)),
+            const SizedBox(height: 12),
+            Text('Build:    ${release.latestCode}',
+                style: const TextStyle(fontSize: 13)),
+            Text('File:     ${release.filename}',
+                style: const TextStyle(fontSize: 13)),
+            Text('Size:     ${release.sizeMb} MB',
+                style: const TextStyle(fontSize: 13)),
+            if (release.releasedAt.isNotEmpty)
+              Text('Released: ${release.releasedAt}',
+                  style: const TextStyle(fontSize: 12)),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Later'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Update Now'),
+          ),
+        ],
+      ),
+    );
+    if (go != true || !mounted) return;
+    await _runDownloadAndInstall(release);
+  }
+
+  Future<void> _runDownloadAndInstall(AppReleaseInfo release) async {
+    final progress = ValueNotifier<double>(0);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Downloading…'),
+        content: ValueListenableBuilder<double>(
+          valueListenable: progress,
+          builder: (_, p, __) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              LinearProgressIndicator(value: p > 0 ? p : null),
+              const SizedBox(height: 12),
+              Text('${(p * 100).toStringAsFixed(0)}%'),
+            ],
+          ),
+        ),
+      ),
+    );
+    try {
+      await AppUpdateService.instance.downloadAndInstall(
+        release,
+        onProgress: (recv, total) {
+          if (total > 0) progress.value = recv / total;
+        },
+      );
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+    } catch (e) {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Update failed: $e'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    } finally {
+      progress.dispose();
+    }
   }
 
   Future<void> _loadAll() async {
@@ -135,9 +308,45 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   void _comingSoon(String feature) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('$feature coming soon'), duration: const Duration(seconds: 2)),
+    showTraxSnackBar(context, '$feature coming soon');
+  }
+
+  Future<void> _openGpsIntervalPicker() async {
+    final current = GpsIntervalSettings.baseIntervalMs;
+    final picked = await showDialog<int>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('GPS Sampling Rate'),
+        children: [
+          for (final ms in GpsIntervalSettings.options)
+            RadioListTile<int>(
+              value: ms,
+              groupValue: current,
+              title: Text(GpsIntervalSettings.labelFor(ms)),
+              subtitle: Text(_gpsIntervalHint(ms)),
+              onChanged: (v) => Navigator.pop(ctx, v),
+            ),
+        ],
+      ),
     );
+    if (picked != null && picked != current) {
+      await GpsIntervalSettings.set(picked);
+      if (mounted) setState(() {});
+    }
+  }
+
+  String _gpsIntervalHint(int ms) {
+    switch (ms) {
+      case 100:
+        return 'Highest precision · higher battery usage';
+      case 200:
+        return 'Balanced precision and battery';
+      case 500:
+        return 'Lower precision · better battery life';
+      case 1000:
+        return 'Lowest precision · best battery life';
+    }
+    return '';
   }
 
   @override
@@ -193,12 +402,28 @@ class _ProfileScreenState extends State<ProfileScreen> {
               _buildSection('Settings', [
                 _MenuItem(Icons.person_outline, 'Edit Profile', '',
                     onTap: _openEditProfile),
+                _MenuItem(Icons.gps_fixed, 'GPS Sampling',
+                    GpsIntervalSettings.labelFor(
+                        GpsIntervalSettings.baseIntervalMs),
+                    onTap: _openGpsIntervalPicker),
                 _MenuItem(Icons.language, 'Language', 'English',
                     onTap: () => _comingSoon('Language settings')),
                 _MenuItem(Icons.notifications_outlined, 'Notifications', '',
                     onTap: () => _comingSoon('Notification settings')),
                 _MenuItem(Icons.help_outline, 'Help & Support', '',
                     onTap: () => _comingSoon('Help & Support')),
+              ]),
+              const SizedBox(height: 8),
+              _buildSection('About', [
+                _MenuItem(
+                  Icons.system_update_alt,
+                  _updateStatus?.hasUpdate == true
+                      ? 'Update Available'
+                      : 'App Version',
+                  _versionTileSubtitle(),
+                  onTap: _onTapVersionTile,
+                  highlight: _updateStatus?.hasUpdate == true,
+                ),
               ]),
               const SizedBox(height: 16),
               Padding(
@@ -283,14 +508,46 @@ class _ProfileScreenState extends State<ProfileScreen> {
               return Column(
                 children: [
                   ListTile(
-                    leading:
-                        Icon(item.icon, color: AppColors.primary, size: 22),
+                    leading: Icon(item.icon,
+                        color: item.highlight
+                            ? AppColors.error
+                            : AppColors.primary,
+                        size: 22),
                     title: Text(item.title,
-                        style: const TextStyle(fontSize: 14)),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: item.highlight
+                              ? FontWeight.w700
+                              : FontWeight.w400,
+                          color: item.highlight
+                              ? AppColors.error
+                              : AppColors.textPrimary,
+                        )),
+                    subtitle: (item.highlight && item.subtitle.isNotEmpty)
+                        ? Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(item.subtitle,
+                                style: const TextStyle(
+                                    fontSize: 12,
+                                    color: AppColors.textSecondary)),
+                          )
+                        : null,
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (item.subtitle.isNotEmpty)
+                        if (item.highlight)
+                          Container(
+                            width: 8,
+                            height: 8,
+                            margin: const EdgeInsets.only(right: 6),
+                            decoration: const BoxDecoration(
+                              color: AppColors.error,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        if (!item.highlight && item.subtitle.isNotEmpty)
                           Text(item.subtitle,
                               style: const TextStyle(
                                   fontSize: 12,
@@ -339,5 +596,7 @@ class _MenuItem {
   final IconData icon;
   final String title, subtitle;
   final VoidCallback? onTap;
-  _MenuItem(this.icon, this.title, this.subtitle, {this.onTap});
+  final bool highlight;
+  _MenuItem(this.icon, this.title, this.subtitle,
+      {this.onTap, this.highlight = false});
 }

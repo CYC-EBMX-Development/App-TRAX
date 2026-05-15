@@ -10,7 +10,7 @@ import '../../services/active_ride_service.dart';
 import '../../common/network/trax_api.dart';
 import '../../common/widgets/trax_dialog.dart';
 import '../../theme/app_theme.dart';
-import 'ride_summary_page.dart';
+import '../../common/widgets/map_router.dart';
 import 'package:trax_app/common/widgets/page_code_badge.dart';
 
 class FreeRidePage extends StatefulWidget {
@@ -507,9 +507,7 @@ class _FreeRidePageState extends State<FreeRidePage> {
                 onPressed: () {
                   _svc.clearCompleted();
                   if (rideId != null) {
-                    Navigator.of(context).pushReplacement(
-                      MaterialPageRoute(builder: (_) => RideSummaryPage(rideId: rideId)),
-                    );
+                    MapRouter.openRideSummary(context, rideId: rideId, replace: true);
                   } else {
                     Navigator.pop(context);
                   }

@@ -3,6 +3,7 @@ package com.trax.config;
 import com.trax.model.*;
 import com.trax.repository.*;
 import com.trax.service.ImageDownloadService;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
@@ -19,6 +20,9 @@ public class DataInitializer implements ApplicationRunner {
     private final TraxModuleRepository moduleRepo;
     private final UserRepository userRepo;
     private final ImageDownloadService imageDownloadService;
+
+    @Value("${app.public-base-url:http://localhost:8080}")
+    private String publicBaseUrl;
 
     public DataInitializer(BikeBrandRepository brandRepo,
                            BikeModelRepository modelRepo,
@@ -129,18 +133,30 @@ public class DataInitializer implements ApplicationRunner {
         }
     }
 
-    /** Set well-known accounts' avatars to local images served from /images/avatars/. */
+    /**
+     * Seed well-known accounts' avatars to local images served from /images/avatars/.
+     * Only fills the URL when the user has no avatar yet — never clobbers a user-uploaded one.
+     */
     private void patchUserAvatars() {
+        String base = publicBaseUrl != null && !publicBaseUrl.isEmpty()
+                ? publicBaseUrl.replaceAll("/+$", "")
+                : "http://localhost:8080";
         Map<String, String> nameToAvatar = Map.of(
-                "Joshua", "http://localhost:8080/images/avatars/joshua.png",
-                "Steve",  "http://localhost:8080/images/avatars/steve.png",
-                "Royce",  "http://localhost:8080/images/avatars/royce.png"
+                "Joshua", base + "/images/avatars/joshua.png",
+                "Steve",  base + "/images/avatars/steve.png",
+                "Royce",  base + "/images/avatars/royce.png"
         );
         for (User u : userRepo.findAll()) {
             String n = u.getName();
             if (n == null) continue;
             String url = nameToAvatar.get(n);
-            if (url != null && !url.equals(u.getAvatarUrl())) {
+            if (url == null) continue;
+            String existing = u.getAvatarUrl();
+            // Only seed when missing; do NOT overwrite an existing (possibly user-uploaded) URL.
+            // Also migrate the legacy hardcoded localhost:8080 form once.
+            boolean isLegacyLocalhost = existing != null
+                    && existing.startsWith("http://localhost:8080/images/avatars/");
+            if (existing == null || existing.isEmpty() || isLegacyLocalhost) {
                 u.setAvatarUrl(url);
                 userRepo.save(u);
             }

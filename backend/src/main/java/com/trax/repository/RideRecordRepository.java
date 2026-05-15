@@ -9,4 +9,5 @@ public interface RideRecordRepository extends JpaRepository<RideRecord, Long> {
     List<RideRecord> findByUserIdOrderByStartTimeDesc(Long userId);
     Optional<RideRecord> findFirstByUserIdAndStatusInOrderByStartTimeDesc(Long userId, List<String> statuses);
     List<RideRecord> findByBicycleId(Long bicycleId);
+    long countByTrailId(Long trailId);
 }

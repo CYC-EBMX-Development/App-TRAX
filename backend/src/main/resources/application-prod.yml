@@ -45,6 +45,10 @@ jwt:
   secret: ${JWT_SECRET}
   expiration: 86400000
 
+app:
+  images:
+    dir: ${IMAGES_DIR:/var/lib/trax/images}
+
 google:
   maps:
     api-key: ${GMAPS_KEY}

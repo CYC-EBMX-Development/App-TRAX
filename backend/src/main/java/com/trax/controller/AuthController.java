@@ -40,8 +40,12 @@ public class AuthController {
     /** Register a new account with email, password, and verification code. */
     @PostMapping("/registerByPwd")
     public ApiResponse<Void> registerByPwd(@RequestBody RegisterByPwdRequest request) {
-        if (!codeService.verify(request.getEmail(), request.getVerificationCode())) {
-            throw new RuntimeException("Invalid or expired verification code");
+        // Verification temporarily disabled: skip code check when not provided.
+        String code = request.getVerificationCode();
+        if (code != null && !code.isBlank()) {
+            if (!codeService.verify(request.getEmail(), code)) {
+                throw new RuntimeException("Invalid or expired verification code");
+            }
         }
         authService.register(request.getEmail(), request.getPassword());
         return ApiResponse.success("Registration successful", null);

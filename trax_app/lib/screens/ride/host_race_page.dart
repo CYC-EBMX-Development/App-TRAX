@@ -180,7 +180,8 @@ class _HostRacePageState extends State<HostRacePage> {
       body: _loading
           ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
           : ListView(
-              padding: const EdgeInsets.all(16),
+              padding: EdgeInsets.fromLTRB(
+                  16, 16, 16, 16 + MediaQuery.of(context).padding.bottom),
               children: [
                 _buildTextField('Race Name', _nameCtrl, 'e.g. Sunday Sprint'),
                 const SizedBox(height: 16),

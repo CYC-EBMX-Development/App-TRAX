@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TRAX · Download</title>
+<link rel="icon" type="image/png" href="/apk/app_icon.png">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+       background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);color:#f1f5f9;
+       min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;}
+  .card{background:rgba(255,255,255,.06);backdrop-filter:blur(12px);
+        border:1px solid rgba(255,255,255,.1);border-radius:24px;
+        padding:40px 32px;max-width:480px;width:100%;text-align:center;
+        box-shadow:0 20px 60px rgba(0,0,0,.4);}
+  .icon-img{width:96px;height:96px;border-radius:22px;margin:0 auto 16px;display:block;
+            box-shadow:0 12px 36px rgba(249,115,22,.25);}
+  .logo{font-size:32px;font-weight:800;letter-spacing:3px;
+        background:linear-gradient(135deg,#fb923c,#f97316);
+        -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+        background-clip:text;margin-bottom:6px;}
+  .tagline{color:#94a3b8;font-size:13px;margin-bottom:28px;}
+  .btn{display:flex;align-items:center;justify-content:center;gap:12px;
+       padding:18px 24px;border-radius:14px;font-size:16px;font-weight:600;
+       text-decoration:none;transition:all .2s;margin-bottom:14px;cursor:pointer;border:none;width:100%;}
+  .btn-android{background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;}
+  .btn-android:hover{transform:translateY(-2px);box-shadow:0 10px 30px rgba(22,163,74,.4);}
+  .btn-ios{background:rgba(255,255,255,.08);color:#cbd5e1;border:1px solid rgba(255,255,255,.15);cursor:not-allowed;}
+  .icon{width:24px;height:24px;}
+  .meta{color:#64748b;font-size:12px;margin-top:8px;font-variant-numeric:tabular-nums;}
+  .info{margin-top:32px;padding-top:24px;border-top:1px solid rgba(255,255,255,.08);
+        text-align:left;font-size:13px;color:#cbd5e1;line-height:1.7;}
+  .info h3{color:#f1f5f9;font-size:14px;margin-bottom:10px;font-weight:600;}
+  .info ol{padding-left:20px;}
+  .info li{margin-bottom:4px;}
+  code{background:rgba(0,0,0,.3);padding:2px 6px;border-radius:4px;font-size:12px;color:#fbbf24;}
+  .footer{margin-top:24px;font-size:11px;color:#475569;}
+</style>
+</head>
+<body>
+<div class="card">
+  <img class="icon-img" src="/apk/app_icon.png" alt="TRAX" onerror="this.style.display='none'">
+  <div class="logo">TRAX</div>
+  <div class="tagline">Ride tracking · Gear management · Race records</div>
+
+  <a id="downloadBtn" class="btn btn-android" href="/apk/trax-latest.apk" download>
+    <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M17.6 9.48l1.84-3.18a.36.36 0 00-.62-.36l-1.86 3.22a11.4 11.4 0 00-9.92 0L5.18 5.94a.36.36 0 00-.62.36L6.4 9.48A10.8 10.8 0 001 18h22a10.8 10.8 0 00-5.4-8.52zM7 15.25a1 1 0 111-1 1 1 0 01-1 1zm10 0a1 1 0 111-1 1 1 0 01-1 1z"/></svg>
+    Download Android APK
+  </a>
+  <div class="meta" id="versionMeta">Loading version…</div>
+
+  <button class="btn btn-ios" disabled style="margin-top:14px">
+    <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/></svg>
+    iOS (coming soon via TestFlight)
+  </button>
+  <div class="meta">Requires an Apple Developer account</div>
+
+  <div class="info">
+    <h3>Android installation</h3>
+    <ol>
+      <li>Open this page in your phone's browser</li>
+      <li>Tap "Download Android APK"</li>
+      <li>Open the downloaded file when finished</li>
+      <li>If prompted about "Unknown sources", choose Allow</li>
+      <li>Finish installation, then open the app and sign up</li>
+    </ol>
+  </div>
+
+  <div class="footer">© 2026 TRAX · Internal Beta</div>
+</div>
+<script>
+  fetch('/apk/version.json', {cache:'no-store'})
+    .then(r => r.ok ? r.json() : Promise.reject(r.status))
+    .then(v => {
+      const btn = document.getElementById('downloadBtn');
+      const meta = document.getElementById('versionMeta');
+      const filename = v.filename || v.file;
+      if (filename) btn.href = '/apk/' + filename;
+      const parts = [];
+      if (v.latest) parts.push('v' + v.latest);
+      else if (filename) parts.push(filename);
+      if (v.size_mb) parts.push(v.size_mb + ' MB');
+      const releasedAt = v.released_at || v.built_at;
+      if (releasedAt) parts.push('released ' + releasedAt.slice(0, 10));
+      meta.textContent = parts.join(' · ');
+    })
+    .catch(() => {
+      document.getElementById('versionMeta').textContent = 'trax-latest';
+    });
+</script>
+</body>
+</html>

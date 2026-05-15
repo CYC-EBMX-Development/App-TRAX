@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import '../../common/global/global_user_info.dart';
 import '../../common/network/trax_api.dart';
+import '../../common/services/app_update_service.dart';
+import '../../common/services/map_provider.dart';
 import '../../common/widgets/trax_refresh_button.dart';
 import '../../models/ebike.dart';
 import '../../models/race.dart';
@@ -10,22 +12,57 @@ import '../../models/trail.dart';
 import '../../theme/app_theme.dart';
 import '../garage/trax_module_inquiry_page.dart';
 import '../profile/profile_screen.dart';
-import '../ride/free_ride_page.dart';
 import '../ride/host_race_page.dart';
+import '../ride/my_events_page.dart';
 import '../ride/ride_detail_page.dart';
 import '../ride/ride_screen.dart';
-import '../trails/trail_detail_page.dart';
-import '../trails/trail_record_page.dart';
+import '../../common/widgets/map_router.dart';
+// TrailRecordPage now routed via MapRouter (see ../common/widgets/map_router.dart)
 import 'package:trax_app/common/widgets/page_code_badge.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  /// Optional callback to switch the parent bottom-nav tab.
+  /// Index matches `MainScreen._pages` (0=Home, 1=Session, 3=Trails, 4=Garage).
+  final void Function(int index)? onSwitchTab;
+
+  const HomeScreen({super.key, this.onSwitchTab});
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<HomeScreen> createState() => HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class HomeScreenState extends State<HomeScreen> {
+  /// Public refresh hook invoked by the bottom-nav.
+  Future<void> refresh() => _loadAll();
+
+  static IconData _iconForMode(MapProviderMode m) => switch (m) {
+        MapProviderMode.auto => Icons.auto_awesome,
+        MapProviderMode.forceGoogle => Icons.public,
+        MapProviderMode.forceAmap => Icons.map_outlined,
+      };
+
+  static String _labelForMode(MapProviderMode m) => switch (m) {
+        MapProviderMode.auto => 'Default (auto)',
+        MapProviderMode.forceGoogle => 'Google Maps',
+        MapProviderMode.forceAmap => 'AMap (高德)',
+      };
+
+  static PopupMenuItem<MapProviderMode> _mapModeItem(
+      MapProviderMode item, MapProviderMode current, IconData icon, String label) {
+    final selected = item == current;
+    return PopupMenuItem<MapProviderMode>(
+      value: item,
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: AppColors.textPrimary),
+          const SizedBox(width: 10),
+          Expanded(child: Text(label)),
+          if (selected) const Icon(Icons.check, size: 18, color: AppColors.primary),
+        ],
+      ),
+    );
+  }
+
   bool _loading = true;
   List<RideRecord> _rides = [];
   List<Trail> _trails = [];
@@ -36,6 +73,10 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _loadAll();
+    // Fire-and-forget OTA check; success flips
+    // AppUpdateService.instance.hasUpdateAvailable, which the avatar
+    // badge below listens to.
+    AppUpdateService.instance.checkForUpdate();
   }
 
   Future<void> _loadAll() async {
@@ -131,6 +172,13 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) _loadAll();
   }
 
+  Future<void> _openMyEvents() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const MyEventsPage()),
+    );
+    if (mounted) _loadAll();
+  }
+
   Future<void> _startRide() async {
     if (_bikes.isEmpty) {
       await Navigator.of(context).push(
@@ -139,16 +187,12 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted) _loadAll();
       return;
     }
-    await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => FreeRidePage(selectedBike: _bikes.first)),
-    );
+    await MapRouter.openFreeRide(context, selectedBike: _bikes.first);
     if (mounted) _loadAll();
   }
 
   Future<void> _createTrail() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const TrailRecordPage()),
-    );
+    await MapRouter.openTrailRecord(context);
     if (mounted) _loadAll();
   }
 
@@ -169,9 +213,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _openTrailDetail(Trail t) {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => TrailDetailPage(trail: t)),
-    );
+    MapRouter.openTrailDetail(context, t);
   }
 
   @override
@@ -187,9 +229,12 @@ class _HomeScreenState extends State<HomeScreen> {
           padding: const EdgeInsets.only(left: 12),
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const ProfileScreen()),
-            ),
+            onTap: () {
+              AppUpdateService.instance.markUpdateSeen();
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const ProfileScreen()),
+              );
+            },
             child: Center(
               child: Obx(() {
                 final avatar = GlobalUserInfo.instance.avatar.value;
@@ -198,19 +243,49 @@ class _HomeScreenState extends State<HomeScreen> {
                     Uri.tryParse(avatar)?.hasScheme == true;
                 final name = GlobalUserInfo.instance.name.value;
                 final letter = name.isNotEmpty ? name[0].toUpperCase() : 'T';
-                return CircleAvatar(
-                  radius: 18,
-                  backgroundColor: AppColors.primary,
-                  backgroundImage: hasAvatar ? NetworkImage(avatar) : null,
-                  child: !hasAvatar
-                      ? Text(
-                          letter,
-                          style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white),
-                        )
-                      : null,
+                return ValueListenableBuilder<bool>(
+                  valueListenable:
+                      AppUpdateService.instance.hasUpdateAvailable,
+                  builder: (context, hasUpdate, _) {
+                    final avatarWidget = CircleAvatar(
+                      radius: 18,
+                      backgroundColor: AppColors.primary,
+                      backgroundImage:
+                          hasAvatar ? NetworkImage(avatar) : null,
+                      child: !hasAvatar
+                          ? Text(
+                              letter,
+                              style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.white),
+                            )
+                          : null,
+                    );
+                    if (!hasUpdate) return avatarWidget;
+                    return Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        avatarWidget,
+                        Positioned(
+                          top: -2,
+                          right: -2,
+                          child: Container(
+                            width: 10,
+                            height: 10,
+                            decoration: BoxDecoration(
+                              color: AppColors.error,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                  color: Theme.of(context)
+                                      .scaffoldBackgroundColor,
+                                  width: 1.5),
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
                 );
               }),
             ),
@@ -219,6 +294,38 @@ class _HomeScreenState extends State<HomeScreen> {
         title: traxTitle('TRAX',
             style: const TextStyle(fontWeight: FontWeight.w800, letterSpacing: 4)),
         actions: [
+          ValueListenableBuilder<MapProvider>(
+            valueListenable: MapProviderService.providerNotifier,
+            builder: (context, _, __) {
+              final mode = MapProviderService.mode;
+              return PopupMenuButton<MapProviderMode>(
+                tooltip: 'Map provider',
+                icon: Icon(_iconForMode(mode), size: 22),
+                onSelected: (m) async {
+                  await MapProviderService.setMode(m);
+                  if (!context.mounted) return;
+                  final messenger = ScaffoldMessenger.of(context);
+                  messenger.clearSnackBars();
+                  messenger.showSnackBar(
+                    SnackBar(
+                      behavior: SnackBarBehavior.floating,
+                      duration: const Duration(seconds: 2),
+                      margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                      content: Text('Map provider: ${_labelForMode(m)}'),
+                    ),
+                  );
+                },
+                itemBuilder: (context) => [
+                  _mapModeItem(MapProviderMode.auto, mode,
+                      Icons.auto_awesome, 'Default (auto)'),
+                  _mapModeItem(MapProviderMode.forceGoogle, mode,
+                      Icons.public, 'Google Maps'),
+                  _mapModeItem(MapProviderMode.forceAmap, mode,
+                      Icons.map_outlined, 'AMap (高德)'),
+                ],
+              );
+            },
+          ),
           IconButton(
               icon: const Icon(Icons.notifications_outlined), onPressed: () {}),
         ],
@@ -231,39 +338,23 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                decoration: BoxDecoration(
-                    color: AppColors.surface,
-                    borderRadius: BorderRadius.circular(12)),
-                child: const TextField(
-                  decoration: InputDecoration(
-                    hintText: 'Search trails, riders...',
-                    prefixIcon: Icon(Icons.search, color: AppColors.textSecondary),
-                    border: InputBorder.none,
-                    enabledBorder: InputBorder.none,
-                    focusedBorder: InputBorder.none,
-                    contentPadding: EdgeInsets.symmetric(vertical: 14),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 24),
               _buildWelcomeBanner(),
               const SizedBox(height: 24),
               _SectionHeader(
                   title: 'Recent Rides',
-                  onSeeAll: _rides.isEmpty ? null : _openRideTab),
+                  onSeeAll: _rides.isEmpty ? null : () => widget.onSwitchTab?.call(1)),
               const SizedBox(height: 12),
               _buildRecentRides(),
               const SizedBox(height: 24),
               _SectionHeader(
                   title: 'Featured Trails',
-                  onSeeAll: _trails.isEmpty ? null : () {}),
+                  onSeeAll: _trails.isEmpty ? null : () => widget.onSwitchTab?.call(3)),
               const SizedBox(height: 12),
               _buildFeaturedTrails(),
               const SizedBox(height: 24),
               _SectionHeader(
                   title: 'Upcoming Events',
-                  onSeeAll: _events.isEmpty ? null : _openRideTab),
+                  onSeeAll: _events.isEmpty ? null : _openMyEvents),
               const SizedBox(height: 12),
               _buildUpcomingEvents(),
               const SizedBox(height: 80),

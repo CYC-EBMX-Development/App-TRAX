@@ -4,6 +4,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import '../../common/utils/map_gesture_recognizers.dart';
 import '../../common/utils/cp_marker_icons.dart';
+import '../../common/utils/avatar_marker_icons.dart';
 import '../../common/utils/start_end_marker_icons.dart';
 import 'package:geolocator/geolocator.dart';
 import 'dart:math' as math;
@@ -16,8 +17,9 @@ import '../../common/network/trax_api.dart';
 import '../../common/widgets/trax_dialog.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/lap_splits_grid.dart';
-import 'ride_summary_page.dart';
+import '../../common/widgets/map_router.dart';
 import 'package:trax_app/common/widgets/page_code_badge.dart';
+import '../../common/global/global_user_info.dart';
 
 class LapTimerPage extends StatefulWidget {
   final EBike selectedBike;
@@ -52,10 +54,16 @@ class _LapTimerPageState extends State<LapTimerPage> {
   int _lastKnownLapCount = 0;
   final Map<int, double> _lapOverlaps = {}; // lapNumber -> overlap %
 
-  // Client-side gate-arm timestamp — ONLY used to drive the displayed
-  // "current lap" elapsed time before the server has reported any
-  // completed lap. Lap COUNTING stays server-authoritative.
-  DateTime? _displayGateArmedAt;
+  // ── Client-side start-line crossing detection ───────────
+  // The lap timer arms when the rider first enters the trail's start
+  // zone, then closes each lap on the next entry into the zone (after
+  // having left it). The timer is paused at 0:00 until the first arm.
+  // Lap counting is therefore the rider's own ground-truth crossing of
+  // the start/finish line, not a server-side guess.
+  DateTime? _lapStartedAt;
+  bool _wasInsideStart = false;
+  final List<RideLap> _localLaps = [];
+  static const int _minLapSeconds = 10;
   // Gate threshold in metres for arming the display timer (matches server
   // LAP_FINISH_ZONE_KM = 30 m).
   static const double _gateArmMeters = 30.0;
@@ -72,6 +80,9 @@ class _LapTimerPageState extends State<LapTimerPage> {
   // Whether checkpoint markers are shown on the map (toggleable).
   bool _showCheckpoints = true;
 
+  // Self-avatar map marker (built lazily once per session).
+  BitmapDescriptor? _meIcon;
+
   @override
   void initState() {
     super.initState();
@@ -81,6 +92,21 @@ class _LapTimerPageState extends State<LapTimerPage> {
     _loadTrailRoute();
     _loadUserCheckpoints();
     _initLocation();
+    _warmMeIcon();
+  }
+
+  Future<void> _warmMeIcon() async {
+    final userInfo = GlobalUserInfo.instance;
+    final url = userInfo.avatar.value;
+    final name = userInfo.name.value;
+    final icon = await AvatarMarkerIcons.build(
+      context,
+      avatarUrl: url.isEmpty ? null : url,
+      name: name,
+      color: AppColors.primary,
+      isMe: true,
+    );
+    if (mounted) setState(() => _meIcon = icon);
   }
 
   @override
@@ -121,18 +147,50 @@ class _LapTimerPageState extends State<LapTimerPage> {
       );
     }).toList();
     setState(() => _trailRoute = pts);
-    if (pts.isNotEmpty && _svc.rideStatus == 'idle') {
-      // Use custom start location if provided, otherwise keep current position
-      if (widget.startLocation != null) {
+    if (pts.isNotEmpty) {
+      if (_svc.rideStatus == 'idle' && widget.startLocation != null) {
         _svc.currentPos = widget.startLocation!;
       }
-      final startPos = _svc.currentPos;
-      _animateTo(startPos);
-      // Auto-start the ride if requested from setup page
-      if (widget.autoStart) {
+      _fitTrailBounds();
+      if (_svc.rideStatus == 'idle' && widget.autoStart) {
         _onStart();
       }
     }
+  }
+
+  /// Fit the camera to the whole trail (plus checkpoints) so the user
+  /// can see the full loop on entry instead of a fixed 15-zoom centered
+  /// on the route midpoint.
+  void _fitTrailBounds() {
+    if (!_mapReady || _mapController == null) return;
+    final pts = <LatLng>[
+      ..._trailRoute,
+      for (final cp in _userCheckpoints) LatLng(cp.latitude, cp.longitude),
+    ];
+    if (pts.isEmpty) return;
+    if (pts.length == 1) {
+      _mapController!.animateCamera(
+        CameraUpdate.newLatLngZoom(pts.first, 16),
+      );
+      return;
+    }
+    double minLat = pts.first.latitude, maxLat = pts.first.latitude;
+    double minLng = pts.first.longitude, maxLng = pts.first.longitude;
+    for (final p in pts) {
+      if (p.latitude < minLat) minLat = p.latitude;
+      if (p.latitude > maxLat) maxLat = p.latitude;
+      if (p.longitude < minLng) minLng = p.longitude;
+      if (p.longitude > maxLng) maxLng = p.longitude;
+    }
+    _mapController!.animateCamera(
+      CameraUpdate.newLatLngBounds(
+        LatLngBounds(
+          southwest: LatLng(minLat, minLng),
+          northeast: LatLng(maxLat, maxLng),
+        ),
+        60,
+      ),
+    );
   }
 
   Future<void> _initLocation() async {
@@ -157,40 +215,56 @@ class _LapTimerPageState extends State<LapTimerPage> {
   void _onSvcUpdate() {
     if (!mounted) return;
 
-    // Arm the display timer the first time we get within the gate zone of
-    // the trail start point while the ride is active. This only controls
-    // the live "Lap time" readout — lap counting/closing is decided by
-    // the server.
-    if (_displayGateArmedAt == null &&
-        _svc.rideStatus == 'active' &&
-        _trailRoute.isNotEmpty) {
+    // ── Client-side start-line crossing detection ──────────
+    // Detect entering / leaving the start zone, then close laps on the
+    // re-entry edge. This is the source of truth for lap counting; we
+    // ignore server-reported laps (which arrive with delay and missed
+    // the "start counting when the rider crosses the line" requirement).
+    if (_svc.rideStatus == 'active' && _trailRoute.isNotEmpty) {
       final d = _distMeters(_svc.currentPos, _trailRoute.first);
-      if (d <= _gateArmMeters) {
-        _displayGateArmedAt = DateTime.now();
+      final inside = d <= _gateArmMeters;
+      if (inside && !_wasInsideStart) {
+        final now = DateTime.now();
+        if (_lapStartedAt == null) {
+          // First crossing of the start line — the lap timer arms now.
+          _lapStartedAt = now;
+        } else {
+          final elapsed = now.difference(_lapStartedAt!).inSeconds;
+          if (elapsed >= _minLapSeconds) {
+            // Close the in-progress lap and immediately start the next.
+            final lapNum = _localLaps.length + 1;
+            _localLaps.add(RideLap(
+              lapNumber: lapNum,
+              durationSeconds: elapsed,
+              distanceKm: 0,
+              startTime: _lapStartedAt,
+              endTime: now,
+            ));
+            _currentLapPasses.clear();
+            _currentLapNumberLive = _localLaps.length + 1;
+            _lapStartedAt = now;
+            // Auto-finish if target reached.
+            if (_localLaps.length >= widget.targetLaps &&
+                !_navigatedToSummary) {
+              _onTargetReached();
+            }
+          }
+        }
       }
+      _wasInsideStart = inside;
     }
 
-    // Lap completion detection — server is the single source of truth
-    // (same logic race uses: read completed laps from RideStats).
-    final laps = _svc.stats?.laps ?? const <RideLap>[];
-    if (laps.length > _lastKnownLapCount) {
-      for (int i = _lastKnownLapCount; i < laps.length; i++) {
-        final lap = laps[i];
-        _lapOverlaps[lap.lapNumber] = lap.overlapPercent ?? 0;
-      }
-      _lastKnownLapCount = laps.length;
-      // A new lap was just completed — reset the live in-progress pass map
-      // so the next lap's row starts fresh.
-      _currentLapPasses.clear();
-      _currentLapNumberLive = laps.length + 1;
+    // Keep _lastKnownLapCount/_lapOverlaps in sync with our local laps so
+    // the rest of the UI keeps reacting.
+    if (_localLaps.length > _lastKnownLapCount) {
+      _lastKnownLapCount = _localLaps.length;
     }
 
     // Live in-progress checkpoint-pass detection. Lap-elapsed is derived
-    // from the last completed lap's endTime (server-authoritative); before
-    // the first lap closes we fall back to the running ride duration.
+    // from _lapStartedAt; before the first arm it stays at 0.
     if (_svc.rideStatus == 'active') {
-      final completed = laps.length;
-      final lapElapsed = _currentLapElapsedSec(laps);
+      final completed = _localLaps.length;
+      final lapElapsed = _currentLapElapsedSec(_localLaps);
       _currentLapNumberLive =
           (completed + 1).clamp(1, widget.targetLaps);
       for (final cp in _userCheckpoints) {
@@ -218,23 +292,20 @@ class _LapTimerPageState extends State<LapTimerPage> {
     }
   }
 
-  /// Seconds elapsed in the in-progress lap.
-  /// - At least one lap completed → now - lastLap.endTime (server-authoritative).
-  /// - No lap completed yet → now - clientGateArmedAt, or 0 if the rider
-  ///   has not yet crossed/entered the trail start zone.
+  Future<void> _onTargetReached() async {
+    final rideId = _svc.rideId;
+    await _svc.stopRide();
+    if (!mounted || rideId == null) return;
+    _navigatedToSummary = true;
+    _goToSummary(rideId);
+  }
+
+  /// Seconds elapsed in the in-progress lap. Returns 0 until the rider
+  /// has crossed the trail start line (i.e. [_lapStartedAt] is set).
   int _currentLapElapsedSec(List<RideLap> laps) {
-    if (laps.isNotEmpty) {
-      final lastEnd = laps.last.endTime;
-      if (lastEnd != null) {
-        final s = DateTime.now().difference(lastEnd).inSeconds;
-        return s < 0 ? 0 : s;
-      }
-    }
-    if (_displayGateArmedAt != null) {
-      final s = DateTime.now().difference(_displayGateArmedAt!).inSeconds;
-      return s < 0 ? 0 : s;
-    }
-    return 0;
+    if (_lapStartedAt == null) return 0;
+    final s = DateTime.now().difference(_lapStartedAt!).inSeconds;
+    return s < 0 ? 0 : s;
   }
 
   /// Haversine distance in meters between two LatLng points.
@@ -307,9 +378,7 @@ class _LapTimerPageState extends State<LapTimerPage> {
   Future<void> _goToSummary(int rideId) async {
     await Future.delayed(const Duration(milliseconds: 300));
     if (!mounted) return;
-    await Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => RideSummaryPage(rideId: rideId)),
-    );
+    await MapRouter.openRideSummary(context, rideId: rideId, replace: true);
     _svc.clearCompleted();
   }
 
@@ -320,143 +389,148 @@ class _LapTimerPageState extends State<LapTimerPage> {
 
   Widget _buildContent(BuildContext context) {
     final rideStatus = _svc.rideStatus;
-    final stats = _svc.stats;
-    final laps = stats?.laps ?? const <RideLap>[];
+    final laps = _localLaps;
     final completedLaps = laps.length;
     final currentLapNumber = (completedLaps + 1).clamp(1, widget.targetLaps);
     final isRunning = rideStatus == 'active' || rideStatus == 'paused';
 
-    // Current lap elapsed seconds — server-authoritative: derived from
-    // the last completed lap's endTime, or the ride's running duration
-    // before the first lap closes.
+    // Current lap elapsed seconds — client-side: derived from
+    // [_lapStartedAt] (the moment the rider crossed the start line).
     final totalSec = _svc.displayDuration;
     final currentLapSec = _currentLapElapsedSec(laps);
 
-    // Initial map target
     final mapTarget = _trailRoute.isNotEmpty
         ? _trailRoute[_trailRoute.length ~/ 2]
         : _svc.currentPos;
 
-    final screenH = MediaQuery.of(context).size.height;
-    final mapH = (screenH * 0.45).clamp(280.0, 460.0);
-
     return Scaffold(
-      body: Stack(
+      body: Column(
         children: [
-          // Map (top half)
-          Positioned(
-            top: 0, left: 0, right: 0,
-            height: mapH,
-            child: GoogleMap(
-            initialCameraPosition: CameraPosition(target: mapTarget, zoom: 15),
-            myLocationEnabled: true,
-            myLocationButtonEnabled: false,
-            zoomControlsEnabled: false,
-            gestureRecognizers: kMapGestureRecognizers,
-            polylines: {
-              if (_trailRoute.length >= 2)
-                Polyline(
-                  polylineId: const PolylineId('trail'),
-                  points: _trailRoute,
-                  color: AppColors.primary.withValues(alpha: 0.5),
-                  width: 5,
-                ),
-              if (_svc.route.length >= 2)
-                Polyline(
-                  polylineId: const PolylineId('ride'),
-                  points: _svc.route,
-                  color: AppColors.primary,
-                  width: 4,
-                ),
-            },
-            markers: {
-              if (_trailRoute.isNotEmpty)
-                Marker(
-                  markerId: const MarkerId('start'),
-                  position: _trailRoute.first,
-                  icon: StartEndMarkerIcons.start,
-                  infoWindow: const InfoWindow(title: 'Start / Finish'),
-                ),
-              for (final cp in _showCheckpoints ? _userCheckpoints : const <UserCheckpoint>[])
-                Marker(
-                  markerId: MarkerId('cp_${cp.sequenceIndex}'),
-                  position: LatLng(cp.latitude, cp.longitude),
-                  icon: CpMarkerIcons.getOrFallback(
-                      context, cp.sequenceIndex),
-                  infoWindow:
-                      InfoWindow(title: 'CP${cp.sequenceIndex}'),
-                ),
-              if (isRunning)
-                Marker(
-                  markerId: const MarkerId('me'),
-                  position: _svc.currentPos,
-                  icon: BitmapDescriptor.defaultMarker,
-                ),
-            },
-            onMapCreated: (c) {
-              _mapController = c;
-              _mapReady = true;
-              if (_trailRoute.isNotEmpty) _animateTo(_trailRoute.first);
-            },
-          ),
-          ),
-
-          // Top app bar
-          Positioned(
-            top: MediaQuery.of(context).padding.top + 8,
-            left: 12,
-            right: 12,
-            child: Row(
+          Expanded(
+            child: Stack(
               children: [
-                _circleBtn(
-                  Icons.arrow_back,
-                  () => Navigator.of(context).pop(),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(22),
-                      boxShadow: [
-                        BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 6),
-                      ],
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.timer, size: 18, color: AppColors.primary),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            widget.trail.name,
-                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                Positioned.fill(
+                  child: GoogleMap(
+                    initialCameraPosition:
+                        CameraPosition(target: mapTarget, zoom: 15),
+                    myLocationEnabled: true,
+                    myLocationButtonEnabled: false,
+                    zoomControlsEnabled: false,
+                    gestureRecognizers: kMapGestureRecognizers,
+                    polylines: {
+                      if (_trailRoute.length >= 2)
+                        Polyline(
+                          polylineId: const PolylineId('trail'),
+                          points: _trailRoute,
+                          color: AppColors.primary.withValues(alpha: 0.5),
+                          width: 5,
                         ),
-                      ],
-                    ),
+                      if (_svc.route.length >= 2)
+                        Polyline(
+                          polylineId: const PolylineId('ride'),
+                          points: _svc.route,
+                          color: AppColors.primary,
+                          width: 4,
+                        ),
+                    },
+                    markers: {
+                      if (_trailRoute.isNotEmpty)
+                        Marker(
+                          markerId: const MarkerId('start'),
+                          position: _trailRoute.first,
+                          icon: StartEndMarkerIcons.start,
+                          infoWindow:
+                              const InfoWindow(title: 'Start / Finish'),
+                        ),
+                      for (final cp in _showCheckpoints
+                          ? _userCheckpoints
+                          : const <UserCheckpoint>[])
+                        Marker(
+                          markerId: MarkerId('cp_${cp.sequenceIndex}'),
+                          position: LatLng(cp.latitude, cp.longitude),
+                          icon: CpMarkerIcons.getOrFallback(
+                              context, cp.sequenceIndex),
+                          infoWindow:
+                              InfoWindow(title: 'CP${cp.sequenceIndex}'),
+                        ),
+                      if (isRunning)
+                        Marker(
+                          markerId: const MarkerId('me'),
+                          position: _svc.currentPos,
+                          icon: _meIcon ?? BitmapDescriptor.defaultMarker,
+                          anchor: const Offset(0.5, 0.5),
+                        ),
+                    },
+                    onMapCreated: (c) {
+                      _mapController = c;
+                      _mapReady = true;
+                      _fitTrailBounds();
+                    },
                   ),
                 ),
-                if (_userCheckpoints.isNotEmpty) ...[
-                  const SizedBox(width: 8),
-                  _cpToggleBtn(),
-                ],
+
+                // Top app bar
+                Positioned(
+                  top: MediaQuery.of(context).padding.top + 8,
+                  left: 12,
+                  right: 12,
+                  child: Row(
+                    children: [
+                      _circleBtn(
+                        Icons.arrow_back,
+                        () => Navigator.of(context).pop(),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(22),
+                            boxShadow: [
+                              BoxShadow(
+                                  color:
+                                      Colors.black.withValues(alpha: 0.1),
+                                  blurRadius: 6),
+                            ],
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.timer,
+                                  size: 18, color: AppColors.primary),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  widget.trail.name,
+                                  style: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      if (_userCheckpoints.isNotEmpty) ...[
+                        const SizedBox(width: 8),
+                        _cpToggleBtn(),
+                      ],
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
 
-          // Bottom panel
-          Positioned(
-            bottom: 0, left: 0, right: 0,
-            child: _buildBottomPanel(
-              isRunning: isRunning,
-              currentLapNumber: currentLapNumber,
-              completedLaps: completedLaps,
-              currentLapSec: currentLapSec,
-              totalSec: totalSec,
-              laps: laps,
-            ),
+          _buildBottomPanel(
+            isRunning: isRunning,
+            currentLapNumber: currentLapNumber,
+            completedLaps: completedLaps,
+            currentLapSec: currentLapSec,
+            totalSec: totalSec,
+            laps: laps,
           ),
         ],
       ),

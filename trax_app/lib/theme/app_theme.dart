@@ -13,32 +13,101 @@ class AppColors {
   static const Color warning = Color(0xFFE69100);
 }
 
-/// App-wide styled SnackBar helper.
-void showTraxSnackBar(BuildContext context, String message, {bool isError = false}) {
-  ScaffoldMessenger.of(context).clearSnackBars();
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(
-      content: Row(
-        children: [
-          Icon(
-            isError ? Icons.error_outline : Icons.info_outline,
-            color: Colors.white,
-            size: 20,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              message,
-              style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w500),
+OverlayEntry? _activeTraxBanner;
+VoidCallback? _activeTraxBannerCancel;
+
+/// App-wide styled top banner (formerly a SnackBar).
+///
+/// Renders just below the status/app bar via the root [Overlay] so the
+/// notification appears in the same spot on Android and iOS, regardless
+/// of which Scaffold is on screen. Tapping dismisses it; otherwise it
+/// auto-dismisses after [duration].
+void showTraxSnackBar(
+  BuildContext context,
+  String message, {
+  bool isError = false,
+  Duration duration = const Duration(seconds: 3),
+}) {
+  // Cancel any in-flight banner first so the latest message wins.
+  _activeTraxBannerCancel?.call();
+  _activeTraxBanner?.remove();
+  _activeTraxBanner = null;
+  _activeTraxBannerCancel = null;
+
+  final overlay = Overlay.of(context, rootOverlay: true);
+  final mq = MediaQuery.of(context);
+  // Push below the status bar + nominal AppBar height so the banner sits
+  // "under the topbar" as requested.
+  final topInset = mq.padding.top + kToolbarHeight + 4;
+
+  late OverlayEntry entry;
+  void dismiss() {
+    if (_activeTraxBanner == entry) {
+      _activeTraxBanner = null;
+      _activeTraxBannerCancel = null;
+    }
+    if (entry.mounted) entry.remove();
+  }
+
+  entry = OverlayEntry(
+    builder: (ctx) => Positioned(
+      top: topInset,
+      left: 16,
+      right: 16,
+      child: SafeArea(
+        bottom: false,
+        child: Material(
+          color: Colors.transparent,
+          child: GestureDetector(
+            onTap: dismiss,
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: isError ? AppColors.error : const Color(0xFF333333),
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x33000000),
+                    blurRadius: 8,
+                    offset: Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    isError ? Icons.error_outline : Icons.info_outline,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      message,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
-        ],
+        ),
       ),
-      backgroundColor: isError ? AppColors.error : const Color(0xFF333333),
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-      duration: const Duration(seconds: 3),
     ),
   );
+
+  _activeTraxBanner = entry;
+  overlay.insert(entry);
+
+  // Schedule auto-dismiss; cancellable so a follow-up call can shorten it.
+  bool cancelled = false;
+  _activeTraxBannerCancel = () => cancelled = true;
+  Future<void>.delayed(duration).then((_) {
+    if (!cancelled) dismiss();
+  });
 }

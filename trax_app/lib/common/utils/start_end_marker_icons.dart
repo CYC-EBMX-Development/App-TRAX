@@ -16,8 +16,10 @@ class StartEndMarkerIcons {
 
   static const _greenFill = Color(0xFF1FA85B);
   static const _redFill = Color(0xFFE8413A);
+  static const _violetFill = Color(0xFF6A00FF);
   static BitmapDescriptor? _start;
   static BitmapDescriptor? _finish;
+  static final Map<int, BitmapDescriptor> _numbered = {};
 
   /// Start (green "S"). Falls back to the default green pin if [warm] has
   /// not completed yet.
@@ -30,6 +32,24 @@ class StartEndMarkerIcons {
   static BitmapDescriptor get finish =>
       _finish ??
       BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed);
+
+  /// Synchronous accessor for a numbered waypoint badge (violet). Falls
+  /// back to the default violet pin until [ensureNumbered] has prepared
+  /// the bitmap for the given number.
+  static BitmapDescriptor numbered(int n) =>
+      _numbered[n] ??
+      BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueViolet);
+
+  /// Lazily build (and cache) a numbered waypoint badge in violet.
+  static Future<BitmapDescriptor> ensureNumbered(int n) async {
+    final cached = _numbered[n];
+    if (cached != null) return cached;
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    final dpr = views.isNotEmpty ? views.first.devicePixelRatio : 3.0;
+    final icon = await _build('$n', _violetFill, dpr);
+    _numbered[n] = icon;
+    return icon;
+  }
 
   /// Pre-build both bitmaps once. Safe to call multiple times. Should be
   /// invoked at app startup (e.g. from main()).

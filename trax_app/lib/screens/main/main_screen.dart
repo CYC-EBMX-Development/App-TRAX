@@ -17,17 +17,44 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   int _currentIndex = 0;
 
-  final List<Widget> _pages = const [
-    HomeScreen(),
-    SessionScreen(),
-    SizedBox(),
-    TrailsScreen(),
-    GarageScreen(),
+  // Keys to invoke each tab page's public `refresh()` whenever the user
+  // taps that tab in the bottom nav. Pages stay alive in the IndexedStack,
+  // so without this they'd only ever load once per app launch.
+  final GlobalKey<HomeScreenState> _homeKey = GlobalKey<HomeScreenState>();
+  final GlobalKey<SessionScreenState> _sessionKey = GlobalKey<SessionScreenState>();
+  final GlobalKey<TrailsScreenState> _trailsKey = GlobalKey<TrailsScreenState>();
+  final GlobalKey<GarageScreenState> _garageKey = GlobalKey<GarageScreenState>();
+
+  late final List<Widget> _pages = [
+    HomeScreen(key: _homeKey, onSwitchTab: _switchTab),
+    SessionScreen(key: _sessionKey),
+    const SizedBox(),
+    TrailsScreen(key: _trailsKey),
+    GarageScreen(key: _garageKey),
   ];
+
+  /// Public-style helper for child pages (e.g. HomeScreen "See all")
+  /// that need to jump to a sibling tab in the bottom nav.
+  void _switchTab(int index) => _onTabTapped(index);
 
   void _onTabTapped(int index) {
     if (index == 2) return;
     setState(() => _currentIndex = index);
+    // Trigger a fresh load every time the user enters a tab.
+    switch (index) {
+      case 0:
+        _homeKey.currentState?.refresh();
+        break;
+      case 1:
+        _sessionKey.currentState?.refresh();
+        break;
+      case 3:
+        _trailsKey.currentState?.refresh();
+        break;
+      case 4:
+        _garageKey.currentState?.refresh();
+        break;
+    }
   }
 
   void _openRideScreen() {
@@ -66,10 +93,20 @@ class _MainScreenState extends State<MainScreen> {
         height: 60,
         child: FloatingActionButton(
           onPressed: _openRideScreen,
+          tooltip: 'Ride',
           backgroundColor: AppColors.primary,
           elevation: 4,
           shape: const CircleBorder(),
-          child: const Icon(Icons.add, color: Colors.white, size: 32),
+          // Dynamic dirt-bike vibe: tilt the two-wheeler icon slightly
+          // backward to suggest a wheelie / acceleration pose.
+          child: Transform.rotate(
+            angle: -0.30, // ~ -17°
+            child: const Icon(
+              Icons.two_wheeler,
+              color: Colors.white,
+              size: 32,
+            ),
+          ),
         ),
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,

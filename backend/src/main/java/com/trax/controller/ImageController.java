@@ -2,6 +2,7 @@ package com.trax.controller;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -17,7 +18,9 @@ import java.nio.file.Paths;
 @RequestMapping("/images")
 public class ImageController {
     private static final Logger logger = LoggerFactory.getLogger(ImageController.class);
-    private static final String IMAGES_DIR = "/Users/cyc_joshua/Documents/CYC/TRAX/App-TRAX/backend/images";
+
+    @Value("${app.images.dir:/Users/cyc_joshua/Documents/CYC/TRAX/App-TRAX/backend/images}")
+    private String imagesDir;
 
     @GetMapping("/**")
     public ResponseEntity<?> getImage(HttpServletRequest request) {
@@ -26,10 +29,10 @@ public class ImageController {
             String requestPath = request.getRequestURI();
             String imagePath = requestPath.replace("/images/", "");
 
-            Path file = Paths.get(IMAGES_DIR, imagePath);
+            Path file = Paths.get(imagesDir, imagePath);
 
             // Security check - prevent directory traversal
-            if (!file.normalize().startsWith(Paths.get(IMAGES_DIR).normalize())) {
+            if (!file.normalize().startsWith(Paths.get(imagesDir).normalize())) {
                 return ResponseEntity.notFound().build();
             }
 

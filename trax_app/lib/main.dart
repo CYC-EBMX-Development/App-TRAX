@@ -6,8 +6,11 @@ import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 
 import 'common/global/global_user_info.dart';
+import 'common/services/map_provider.dart';
+import 'common/services/gps_interval_settings.dart';
 import 'common/utils/app_restart.dart';
 import 'common/utils/start_end_marker_icons.dart';
+import 'common/utils/start_end_marker_icons_amap.dart';
 import 'common/network/trax_api.dart';
 import 'common/utils/trax_storage_util.dart';
 import 'global.dart';
@@ -30,6 +33,14 @@ Future<void> main() async {
 
   // Pre-build shared map marker bitmaps so they render on the first frame.
   await StartEndMarkerIcons.warm();
+  await StartEndMarkerIconsAmap.warm();
+
+  // Decide map provider (Google vs AMap) based on cached preference; a
+  // background GPS-based refresh is kicked off internally.
+  await MapProviderService.init();
+
+  // Load user-selected GPS sampling cadence (Profile → Settings).
+  await GpsIntervalSettings.init();
 
   runApp(const AppWrapper());
 }
@@ -131,9 +142,9 @@ class MyApp extends StatelessWidget {
           surfaceTintColor: Colors.transparent,
         ),
         textSelectionTheme: const TextSelectionThemeData(
-          cursorColor: Colors.white,
-          selectionColor: Colors.white24,
-          selectionHandleColor: Colors.white,
+          cursorColor: Color(0xFF333333),
+          selectionColor: Color(0x33FFB800), // AppColors.primary @ ~20% alpha
+          selectionHandleColor: Color(0xFFFFB800),
         ),
       ),
       scrollBehavior: const CupertinoScrollBehavior(),

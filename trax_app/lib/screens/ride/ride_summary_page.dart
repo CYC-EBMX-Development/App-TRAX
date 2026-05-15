@@ -105,64 +105,63 @@ class _RideSummaryPageState extends State<RideSummaryPage> {
 
     return Scaffold(
       backgroundColor: AppColors.background,
-      body: CustomScrollView(
-        slivers: [
-          // Map header
-          SliverAppBar(
-            expandedHeight: 280,
-            pinned: true,
-            title: traxTitle('Ride Summary'),
-            flexibleSpace: FlexibleSpaceBar(
-              background: _route.isNotEmpty
-                  ? GoogleMap(
-                      initialCameraPosition: CameraPosition(
-                        target: _route[_route.length ~/ 2],
-                        zoom: 14,
-                      ),
-                      polylines: {
-                        Polyline(
-                          polylineId: const PolylineId('route'),
-                          points: _route,
-                          color: AppColors.primary,
-                          width: 4,
-                        ),
-                      },
-                      markers: {
-                        if (_route.isNotEmpty)
-                          Marker(
-                            markerId: const MarkerId('start'),
-                            position: _route.first,
-                            icon: StartEndMarkerIcons.start,
-                          ),
-                        if (_route.length > 1)
-                          Marker(
-                            markerId: const MarkerId('end'),
-                            position: _route.last,
-                            icon: StartEndMarkerIcons.finish,
-                          ),
-                        ...CpMarkerIcons.buildMarkers(
-                          context,
-                          rideCheckpointPositions(_laps),
-                          onWarmed: () { if (mounted) setState(() {}); },
-                        ),
-                      },
-                      myLocationEnabled: false,
-                      zoomControlsEnabled: false,
-                      gestureRecognizers: kMapGestureRecognizers,
-                    )
-                  : Container(
-                      color: AppColors.background,
-                      child: const Center(
-                        child: Icon(Icons.map_outlined, size: 64, color: AppColors.textSecondary),
-                      ),
+      appBar: AppBar(title: traxTitle('Ride Summary')),
+      body: Column(
+        children: [
+          // Map header — fixed height so the map's own gestures are not
+          // stolen by the surrounding scroll view.
+          SizedBox(
+            height: 240,
+            width: double.infinity,
+            child: _route.isNotEmpty
+                ? GoogleMap(
+                    initialCameraPosition: CameraPosition(
+                      target: _route[_route.length ~/ 2],
+                      zoom: 14,
                     ),
-            ),
+                    polylines: {
+                      Polyline(
+                        polylineId: const PolylineId('route'),
+                        points: _route,
+                        color: AppColors.primary,
+                        width: 4,
+                      ),
+                    },
+                    markers: {
+                      if (_route.isNotEmpty)
+                        Marker(
+                          markerId: const MarkerId('start'),
+                          position: _route.first,
+                          icon: StartEndMarkerIcons.start,
+                        ),
+                      if (_route.length > 1)
+                        Marker(
+                          markerId: const MarkerId('end'),
+                          position: _route.last,
+                          icon: StartEndMarkerIcons.finish,
+                        ),
+                      ...CpMarkerIcons.buildMarkers(
+                        context,
+                        rideCheckpointPositions(_laps),
+                        onWarmed: () { if (mounted) setState(() {}); },
+                      ),
+                    },
+                    myLocationEnabled: false,
+                    zoomControlsEnabled: false,
+                    gestureRecognizers: kMapGestureRecognizers,
+                  )
+                : Container(
+                    color: AppColors.background,
+                    child: const Center(
+                      child: Icon(Icons.map_outlined, size: 64, color: AppColors.textSecondary),
+                    ),
+                  ),
           ),
-
-          // Content
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
+          // Scrollable summary content
+          Expanded(
+            child: SingleChildScrollView(
+              padding: EdgeInsets.fromLTRB(
+                  16, 16, 16, 16 + MediaQuery.of(context).padding.bottom),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [

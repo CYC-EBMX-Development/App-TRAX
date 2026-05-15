@@ -23,4 +23,18 @@ plugins {
     id("org.jetbrains.kotlin.android") version "2.2.20" apply false
 }
 
+dependencyResolutionManagement {
+    @Suppress("UnstableApiUsage")
+    repositoriesMode.set(org.gradle.api.initialization.resolve.RepositoriesMode.PREFER_PROJECT)
+    @Suppress("UnstableApiUsage")
+    repositories {
+        google()
+        mavenCentral()
+        // AMap SDK is published on Aliyun's public maven (not Maven Central).
+        maven { setUrl("https://maven.aliyun.com/repository/public") }
+        maven { setUrl("https://maven.aliyun.com/repository/google") }
+        maven { setUrl("https://maven.aliyun.com/repository/jcenter") }
+    }
+}
+
 include(":app")

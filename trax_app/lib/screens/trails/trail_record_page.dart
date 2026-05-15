@@ -1,17 +1,17 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:math';
-import 'package:dio/dio.dart';
-import 'package:dio/io.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import '../../common/services/map_service.dart';
+import '../../common/services/gps_interval_settings.dart';
 import '../../common/utils/start_end_marker_icons.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import '../../theme/app_theme.dart';
-import 'trail_save_page.dart';
+import '../../common/widgets/map_router.dart';
 import 'package:trax_app/common/widgets/page_code_badge.dart';
+import '../../widgets/map_search_box.dart';
 
 class TrailRecordPage extends StatefulWidget {
   const TrailRecordPage({super.key});
@@ -26,7 +26,12 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
   MapType _mapType = MapType.normal;
 
   String _status = 'idle'; // idle, recording, paused, stopped
-  LatLng _currentPos = const LatLng(22.89810, 113.86990);
+  // Initial fallback only used when GPS is unavailable / denied. The map is
+  // not rendered until [_currentPos] becomes non-null so the user does not
+  // briefly see a hardcoded location before being recentred to their own.
+  static const LatLng _kFallbackPos = LatLng(22.89810, 113.86990);
+  LatLng? _currentPos;
+  LatLng get _safeCurrentPos => _currentPos ?? _kFallbackPos;
   final List<LatLng> _route = [];
   final List<_RecordedPoint> _points = [];
   StreamSubscription<Position>? _geoSub;
@@ -44,7 +49,6 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
   // Simulate Lap – user picks waypoints on map
   bool _isPickingLapPoints = false;
   final List<LatLng> _lapWaypoints = [];
-  final TextEditingController _latLngController = TextEditingController();
 
   // Simulate Lap (Draw) – user freehand-draws the lap with their finger.
   // While `_isDrawingLap` is true the GoogleMap's pan/zoom/rotate gestures
@@ -79,11 +83,15 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
   // [_kFastSampleRadiusM]) we drop to 100 ms to capture the lap boundary
   // precisely. Once the rider crosses the boundary and the distance
   // begins to grow again we return to 1 s.
-  static const int _kBaseIntervalMs = 1000;
-  static const int _kFastIntervalMs = 100;
+  // Base cadence is user-configurable via Profile → Settings
+  // (GpsIntervalSettings). The fast cadence (100 ms) only triggers when
+  // the rider is approaching a lap boundary.
+  int get _kBaseIntervalMs => GpsIntervalSettings.baseIntervalMs;
+  int get _kFastIntervalMs =>
+      GpsIntervalSettings.baseIntervalMs < 100 ? GpsIntervalSettings.baseIntervalMs : 100;
   static const double _kFastSampleRadiusM = 10.0;
   Timer? _samplingPollTimer;
-  int _currentIntervalMs = _kBaseIntervalMs;
+  int _currentIntervalMs = GpsIntervalSettings.baseIntervalMs;
   double? _lastDistToStartM;
   double? _lastDistToEndM;
 
@@ -101,42 +109,68 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
       perm = await Geolocator.requestPermission();
     }
     if (perm == LocationPermission.denied ||
-        perm == LocationPermission.deniedForever) return;
+        perm == LocationPermission.deniedForever) {
+      // Permission denied — fall back to the world fallback so the map can
+      // still be shown (mock mode + manual pick still work).
+      if (mounted && _currentPos == null) {
+        setState(() => _currentPos = _kFallbackPos);
+      }
+      return;
+    }
+    // Try a fast-and-loose last-known fix first so the map shows up
+    // immediately even indoors / before the first satellite lock.
+    try {
+      final last = await Geolocator.getLastKnownPosition();
+      if (last != null && mounted && _currentPos == null) {
+        setState(() => _currentPos = LatLng(last.latitude, last.longitude));
+      }
+    } catch (_) {}
+    // Then upgrade to a fresh high-accuracy fix in the background, with a
+    // strict 8s timeout so we never spin forever.
     try {
       final pos = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 8),
+        ),
       );
       if (!mounted) return;
       setState(() => _currentPos = LatLng(pos.latitude, pos.longitude));
       _animateToCurrentPos();
-    } catch (_) {}
+    } catch (_) {
+      // Either timed out or hardware unavailable. If we still have nothing,
+      // show the fallback position so the user can at least interact.
+      if (mounted && _currentPos == null) {
+        setState(() => _currentPos = _kFallbackPos);
+      }
+    }
   }
 
   void _animateToCurrentPos() {
-    if (_mapReady && _mapController != null) {
-      _mapController!.animateCamera(CameraUpdate.newLatLng(_currentPos));
+    final pos = _currentPos;
+    if (pos != null && _mapReady && _mapController != null) {
+      _mapController!.animateCamera(CameraUpdate.newLatLng(pos));
     }
   }
 
   // ── Location Picker ───────────────────────────────────────
 
-  // Approximate bottom panel height (title + stats + controls + padding)
-  static const double _bottomPanelHeight = 260.0;
-
-  /// Y-coordinate for the center of the visible map area (above the bottom panel)
-  double get _mapCenterY {
-    final screenH = MediaQuery.of(context).size.height;
-    return (screenH - _bottomPanelHeight) / 2;
-  }
+  // GlobalKey on the map area so we can read its real pixel size to
+  // resolve the geographic centre when confirming a picked location.
+  final GlobalKey _mapKey = GlobalKey();
 
   Future<void> _onPickLocationTap() async {
     if (_isPicking) {
-      // Second tap: confirm the center of the visible map area
+      // Second tap: confirm the centre of the visible map area
       if (_mapController == null) return;
+      final box = _mapKey.currentContext?.findRenderObject() as RenderBox?;
+      final size = box?.size ?? MediaQuery.of(context).size;
+      // GoogleMap's ScreenCoordinate is in physical pixels, not logical.
+      final dpr = MediaQuery.devicePixelRatioOf(context);
       final center = await _mapController!.getLatLng(
         ScreenCoordinate(
-          x: (MediaQuery.of(context).size.width / 2).round(),
-          y: _mapCenterY.round(),
+          x: (size.width / 2 * dpr).round(),
+          y: (size.height / 2 * dpr).round(),
         ),
       );
       setState(() {
@@ -167,47 +201,14 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
     _durationTimer?.cancel();
     _mockTimer?.cancel();
     _samplingPollTimer?.cancel();
-    _latLngController.dispose();
     _mapController?.dispose();
     // Release the wake-lock when leaving the page.
     WakelockPlus.disable();
     super.dispose();
   }
 
-  void _locateByLatLngInput() {
-    final raw = _latLngController.text.trim();
-    final parts = raw.split(',');
-    if (parts.length != 2) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Format must be: latitude,longitude')),
-      );
-      return;
-    }
-    final lat = double.tryParse(parts[0].trim());
-    final lng = double.tryParse(parts[1].trim());
-    if (lat == null || lng == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Latitude/longitude must be numbers')),
-      );
-      return;
-    }
-    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Coordinates out of range')),
-      );
-      return;
-    }
-
-    final target = LatLng(lat, lng);
-    setState(() {
-      _currentPos = target;
-      if (_status == 'idle') {
-        _pickedLocation = target;
-        _isPicking = false;
-      }
-    });
-    FocusScope.of(context).unfocus();
-    _mapController?.animateCamera(CameraUpdate.newLatLng(target));
+  void _locateMe() {
+    _initLocation();
   }
 
   // ── Recording Controls ─────────────────────────────────
@@ -266,7 +267,7 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
     _samplingPollTimer?.cancel();
     _samplingPollTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (_status != 'recording') return;
-      _maybeAdjustSamplingRate(_currentPos);
+      _maybeAdjustSamplingRate(_safeCurrentPos);
     });
   }
 
@@ -406,13 +407,10 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
     _isLapRecordingMode = false;
 
     // Navigate to save page
-    final saved = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(
-        builder: (_) => TrailSavePage(
-          points: _points.map((p) => p.toJson()).toList(),
-          route: List.from(_route),
-        ),
-      ),
+    final saved = await MapRouter.openTrailSave(
+      context,
+      points: _points.map((p) => p.toJson()).toList(),
+      route: List.from(_route),
     );
     if (!mounted) return;
     if (saved == true || wasLapMode) {
@@ -428,36 +426,82 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
     setState(() {
       _isPickingLapPoints = true;
       _lapWaypoints.clear();
+      _legSegments.clear();
+      _closingLeg = null;
       _errorMessage = null;
     });
   }
 
-  void _onMapTapForLap(LatLng pos) {
-    // Tap-to-add is intentionally disabled; users now drag the map to align
-    // the centered pin and tap the “Add Point” button to drop a waypoint.
-    if (!_isPickingLapPoints) return;
+  Future<void> _onMapTapForLap(LatLng pos) async {
+    if (!_isPickingLapPoints || _isFetchingRoute) return;
+    if (_closingLeg != null) {
+      setState(() => _closingLeg = null);
+    }
+    if (_lapWaypoints.isEmpty) {
+      setState(() {
+        _lapWaypoints.add(pos);
+        _errorMessage = null;
+      });
+      StartEndMarkerIcons.ensureNumbered(1).then((_) {
+        if (mounted) setState(() {});
+      });
+      return;
+    }
+    setState(() {
+      _isFetchingRoute = true;
+      _errorMessage = null;
+    });
+    final prev = _lapWaypoints.last;
+    final leg = await MapService.directionsBetween(a: prev, b: pos);
+    if (!mounted) return;
+    if (leg == null || leg.length < 2) {
+      setState(() {
+        _isFetchingRoute = false;
+        _errorMessage =
+            'No road route from the previous point. Try a closer tap.';
+      });
+      return;
+    }
+    final snapped = leg.last;
+    setState(() {
+      _isFetchingRoute = false;
+      _lapWaypoints.add(snapped);
+      _legSegments.add(leg);
+    });
+    final n = _lapWaypoints.length;
+    StartEndMarkerIcons.ensureNumbered(n).then((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   Future<void> _addLapWaypointAtCenter() async {
-    if (!_isPickingLapPoints || _mapController == null) return;
-    final center = await _mapController!.getLatLng(
-      ScreenCoordinate(
-        x: (MediaQuery.of(context).size.width / 2).round(),
-        y: _mapCenterY.round(),
-      ),
-    );
-    setState(() => _lapWaypoints.add(center));
+    // No longer used — pick mode now uses tap-to-add (see _onMapTapForLap).
+    // Kept as a no-op stub in case any external caller still references it.
   }
 
   void _undoLastLapPoint() {
+    if (_isFetchingRoute) return;
+    if (_closingLeg != null) {
+      setState(() => _closingLeg = null);
+      return;
+    }
     if (_lapWaypoints.isEmpty) return;
-    setState(() => _lapWaypoints.removeLast());
+    setState(() {
+      _lapWaypoints.removeLast();
+      if (_legSegments.isNotEmpty) {
+        _legSegments.removeLast();
+      }
+      _errorMessage = null;
+    });
   }
 
   void _cancelLapPick() {
     setState(() {
       _isPickingLapPoints = false;
       _lapWaypoints.clear();
+      _legSegments.clear();
+      _closingLeg = null;
+      _isFetchingRoute = false;
     });
   }
 
@@ -511,10 +555,14 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
     }
     _lastDrawScreenPos = pos;
     final captured = pos;
+    final dpr = MediaQuery.devicePixelRatioOf(context);
     _drawChain = _drawChain.then((_) async {
       try {
         final ll = await _mapController!.getLatLng(
-          ScreenCoordinate(x: captured.dx.round(), y: captured.dy.round()),
+          ScreenCoordinate(
+            x: (captured.dx * dpr).round(),
+            y: (captured.dy * dpr).round(),
+          ),
         );
         if (!mounted || !_isDrawingLap) return;
         setState(() => _drawnLapPoints.add(ll));
@@ -669,94 +717,96 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
       _lastDrawScreenPos = null;
     });
 
-    final saved = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(
-        builder: (_) => TrailSavePage(
-          points: pts.map((p) => p.toJson()).toList(),
-          route: route,
-        ),
-      ),
+    final saved = await MapRouter.openTrailSave(
+      context,
+      points: pts.map((p) => p.toJson()).toList(),
+      route: route,
     );
     if (!mounted) return;
     if (saved == true) Navigator.of(context).pop(true);
   }
 
   Future<void> _onFinishLapPick() async {
-    if (_lapWaypoints.length < 2) {
-      setState(() => _errorMessage = 'Pick at least 2 waypoints on the map.');
-      return;
-    }
+    // Legacy entry point kept so any external caller still compiles.
+    // The Pick-Points flow is now incremental — see _onMapTapForLap,
+    // _onConfirmLoop and _onDoneSaveLap.
+    return;
+  }
 
+  Future<void> _onConfirmLoop() async {
+    if (_lapWaypoints.length < 2 || _isFetchingRoute) return;
     setState(() {
       _isFetchingRoute = true;
       _errorMessage = null;
     });
-
-    final route = await _fetchLapRouteFromWaypoints(_lapWaypoints);
+    final leg = await MapService.directionsBetween(
+      a: _lapWaypoints.last,
+      b: _lapWaypoints.first,
+    );
     if (!mounted) return;
-
-    if (route == null || route.length < 5) {
+    if (leg == null || leg.length < 2) {
       setState(() {
         _isFetchingRoute = false;
-        _errorMessage = 'Could not build a loop route through selected points.';
+        _errorMessage =
+            'Could not close the loop back to the start point.';
       });
       return;
     }
+    setState(() {
+      _isFetchingRoute = false;
+      _closingLeg = leg;
+    });
+  }
 
-    // Use the shared mock machinery to emit points
-    _isPickingLapPoints = false;
-    _lapWaypoints.clear();
-    _startMockWithRoute(route);
+  Future<void> _onDoneSaveLap() async {
+    if (_legSegments.isEmpty || _closingLeg == null) return;
+    final full = <LatLng>[];
+    for (final leg in _legSegments) {
+      if (full.isEmpty) {
+        full.addAll(leg);
+      } else {
+        full.addAll(leg.skip(1));
+      }
+    }
+    full.addAll(_closingLeg!.skip(1));
+    if (full.isEmpty) return;
+    final dense = _densifyRoute(full, 8.0);
+    final start = DateTime.now().subtract(Duration(seconds: dense.length));
+    final synthetic = <Map<String, dynamic>>[];
+    for (var i = 0; i < dense.length; i++) {
+      final p = dense[i];
+      synthetic.add({
+        'latitude': p.latitude,
+        'longitude': p.longitude,
+        'altitude': 50.0 + sin(i * 0.2) * 5,
+        'timestamp': start.add(Duration(seconds: i)).toIso8601String(),
+      });
+    }
+    final routeForSave = List<LatLng>.from(dense);
+    setState(() {
+      _isPickingLapPoints = false;
+      _lapWaypoints.clear();
+      _legSegments.clear();
+      _closingLeg = null;
+    });
+    final saved = await MapRouter.openTrailSave(
+      context,
+      points: synthetic,
+      route: routeForSave,
+    );
+    if (!mounted) return;
+    if (saved == true) Navigator.of(context).pop(true);
   }
 
   /// Build a closed-loop road route through [waypoints] and back to the first.
   Future<List<LatLng>?> _fetchLapRouteFromWaypoints(List<LatLng> waypoints) async {
-    final origin = '${waypoints.first.latitude},${waypoints.first.longitude}';
-    final wps = waypoints
-        .skip(1)
-        .map((w) => '${w.latitude},${w.longitude}')
-        .join('|');
-
+    if (waypoints.isEmpty) return null;
     try {
-      final dio = Dio();
-      if (kDebugMode) {
-        (dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
-          final client = HttpClient();
-          client.findProxy = (uri) => 'PROXY 127.0.0.1:7897';
-          client.badCertificateCallback = (cert, host, port) => true;
-          return client;
-        };
-      }
-
-      final resp = await dio.get(
-        'https://maps.googleapis.com/maps/api/directions/json',
-        queryParameters: {
-          'origin': origin,
-          'destination': origin, // back to start
-          'waypoints': wps,
-          'mode': 'driving',
-          'key': _mapsApiKey,
-        },
-        options: Options(
-          connectTimeout: const Duration(seconds: 5),
-          receiveTimeout: const Duration(seconds: 8),
-          sendTimeout: const Duration(seconds: 5),
-        ),
+      final pts = await MapService.directionsRoundTrip(
+        origin: waypoints.first,
+        waypoints: waypoints.skip(1).toList(),
       );
-
-      final json = resp.data as Map<String, dynamic>;
-      if (json['status'] != 'OK') return null;
-
-      final routes = json['routes'] as List;
-      if (routes.isEmpty) return null;
-
-      final List<LatLng> pts = [];
-      for (final leg in (routes[0]['legs'] as List)) {
-        for (final step in (leg['steps'] as List)) {
-          pts.addAll(_decodePolyline(step['polyline']['points'] as String));
-        }
-      }
-      if (pts.length < 5) return null;
+      if (pts == null || pts.length < 5) return null;
       pts[pts.length - 1] = pts.first; // ensure closure
       return pts;
     } catch (e) {
@@ -767,11 +817,16 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
 
   // ── Mock Simulation (shared) ────────────────────────────
 
-  static const String _mapsApiKey = 'AIzaSyDmzdgVvZu4f5Q7zCKytQ5Syz0RLQzUxng';
-
   List<LatLng> _mockRoute = [];  // pre-fetched road-following route
   bool _isFetchingRoute = false;
   int _mockEmitIntervalMs = 2000;
+
+  // ── Pick-Points → Snap-and-leg incremental routing ──────
+  // Each tap is snapped to the nearest road, and the leg from the
+  // previous waypoint is appended live. Confirm closes the loop back
+  // to the first point; Done saves the synthesised trail.
+  final List<List<LatLng>> _legSegments = [];
+  List<LatLng>? _closingLeg;
 
   void _onStartMockRoute() async {
     setState(() {
@@ -779,7 +834,7 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
       _errorMessage = null;
     });
 
-    final route = await _fetchRoadLapRoute(_currentPos);
+    final route = await _fetchRoadLapRoute(_safeCurrentPos);
     if (!mounted) return;
 
     if (route == null || route.length < 5) {
@@ -911,57 +966,16 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
     final double latOff = radiusM / 111320.0;
     final double lngOff = radiusM / (111320.0 * cos(center.latitude * pi / 180));
 
-    final origin = '${center.latitude},${center.longitude}';
     // Two ADJACENT waypoints – North then East – forming a triangle with center
-    final ptN = '${center.latitude + latOff},${center.longitude}';           // North
-    final ptE = '${center.latitude},${center.longitude + lngOff}';           // East
+    final ptN = LatLng(center.latitude + latOff, center.longitude);
+    final ptE = LatLng(center.latitude, center.longitude + lngOff);
 
     try {
-      final dio = Dio();
-      if (kDebugMode) {
-        (dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
-          final client = HttpClient();
-          client.findProxy = (uri) => 'PROXY 127.0.0.1:7897';
-          client.badCertificateCallback = (cert, host, port) => true;
-          return client;
-        };
-      }
-
-      final opts = Options(
-        connectTimeout: const Duration(seconds: 5),
-        receiveTimeout: const Duration(seconds: 8),
-        sendTimeout: const Duration(seconds: 5),
+      final allPoints = await MapService.directionsRoundTrip(
+        origin: center,
+        waypoints: [ptN, ptE],
       );
-
-      // Single round-trip: center → North → East → center
-      final resp = await dio.get(
-        'https://maps.googleapis.com/maps/api/directions/json',
-        queryParameters: {
-          'origin': origin,
-          'destination': origin,
-          'waypoints': '$ptN|$ptE',
-          'mode': 'driving',
-          'key': _mapsApiKey,
-        },
-        options: opts,
-      );
-
-      final json = resp.data as Map<String, dynamic>;
-      if (json['status'] != 'OK') return null;
-
-      final routes = json['routes'] as List;
-      if (routes.isEmpty) return null;
-
-      final List<LatLng> allPoints = [];
-      final legs = routes[0]['legs'] as List;
-      for (final leg in legs) {
-        for (final step in (leg['steps'] as List)) {
-          allPoints.addAll(_decodePolyline(step['polyline']['points'] as String));
-        }
-      }
-
-      if (allPoints.length < 5) return null;
-
+      if (allPoints == null || allPoints.length < 5) return null;
       // Ensure closure
       allPoints[allPoints.length - 1] = allPoints.first;
       return allPoints;
@@ -969,33 +983,6 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
       debugPrint('Directions API error: $e');
       return null;
     }
-  }
-
-  /// Decode Google's encoded polyline algorithm.
-  List<LatLng> _decodePolyline(String encoded) {
-    final List<LatLng> points = [];
-    int index = 0;
-    int lat = 0;
-    int lng = 0;
-    while (index < encoded.length) {
-      int shift = 0, result = 0, b;
-      do {
-        b = encoded.codeUnitAt(index++) - 63;
-        result |= (b & 0x1F) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      lat += (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
-      shift = 0;
-      result = 0;
-      do {
-        b = encoded.codeUnitAt(index++) - 63;
-        result |= (b & 0x1F) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      lng += (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
-      points.add(LatLng(lat / 1e5, lng / 1e5));
-    }
-    return points;
   }
 
   // ── Build ──────────────────────────────────────────────
@@ -1007,12 +994,27 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
     final safeTop = MediaQuery.of(context).padding.top;
 
     return Scaffold(
-      body: Stack(
+      body: Column(
         children: [
-          // Map
+          // ─── Map area (takes the upper, expanded region; bottom panel
+          // sits beneath it instead of overlaying it) ───────────────
+          Expanded(
+            child: Stack(
+              key: _mapKey,
+              children: [
+          // Map — only render once we have a real GPS fix (or fallback)
+          // so the user does not briefly see a hardcoded preset location.
+          if (_currentPos == null)
+            const Center(
+              child: CircularProgressIndicator(color: AppColors.primary),
+            )
+          else
           GoogleMap(
-            initialCameraPosition: CameraPosition(target: _currentPos, zoom: 16),
+            initialCameraPosition: CameraPosition(target: _safeCurrentPos, zoom: 16),
             mapType: _mapType,
+            // Default map: flat 2D — disable 3D buildings and tilt entirely.
+            // Satellite keeps tilt available for inspecting terrain.
+            buildingsEnabled: _mapType != MapType.normal,
             myLocationEnabled: true,
             myLocationButtonEnabled: false,
             zoomControlsEnabled: false,
@@ -1021,7 +1023,9 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
             scrollGesturesEnabled: !_isDrawingLap,
             zoomGesturesEnabled: !_isDrawingLap,
             rotateGesturesEnabled: !_isDrawingLap,
-            tiltGesturesEnabled: !_isDrawingLap,
+            // Disable tilt gestures on the default 2D map; allow only on
+            // satellite where the tilted view is meaningful.
+            tiltGesturesEnabled: !_isDrawingLap && _mapType != MapType.normal,
             onTap: _isPickingLapPoints ? _onMapTapForLap : null,
             polylines: {
               if (_route.length >= 2)
@@ -1037,6 +1041,20 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
                   points: _drawnLapPoints,
                   color: AppColors.primary,
                   width: 4,
+                ),
+              if (_isPickingLapPoints)
+                ..._legSegments.asMap().entries.map((e) => Polyline(
+                      polylineId: PolylineId('leg_${e.key}'),
+                      points: e.value,
+                      color: AppColors.primary,
+                      width: 5,
+                    )),
+              if (_isPickingLapPoints && _closingLeg != null)
+                Polyline(
+                  polylineId: const PolylineId('closing_leg'),
+                  points: _closingLeg!,
+                  color: AppColors.primary.withValues(alpha: 0.65),
+                  width: 5,
                 ),
             },
             markers: {
@@ -1059,7 +1077,7 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
               if (_status != 'idle')
                 Marker(
                   markerId: const MarkerId('current'),
-                  position: _currentPos,
+                  position: _safeCurrentPos,
                   icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
                 ),
               // Confirmed picked-location pin when idle
@@ -1069,15 +1087,13 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
                   position: _pickedLocation!,
                   icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
                 ),
-              // Lap waypoint markers (numbered)
+              // Lap waypoint markers (numbered violet badges)
               for (int i = 0; i < _lapWaypoints.length; i++)
                 Marker(
                   markerId: MarkerId('lap_wp_$i'),
                   position: _lapWaypoints[i],
-                  icon: BitmapDescriptor.defaultMarkerWithHue(
-                    i == 0 ? BitmapDescriptor.hueGreen : BitmapDescriptor.hueViolet,
-                  ),
-                  infoWindow: InfoWindow(title: i == 0 ? 'Start' : 'Point ${i + 1}'),
+                  icon: StartEndMarkerIcons.numbered(i + 1),
+                  infoWindow: InfoWindow(title: 'Point ${i + 1}'),
                 ),
             },
             onMapCreated: (c) {
@@ -1098,13 +1114,10 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
               ),
             ),
 
-          // Center crosshair when picking
+          // Center crosshair when picking (centred within the map area)
           if (_isPicking)
-            Positioned(
-              left: 0,
-              right: 0,
-              top: _mapCenterY - 20,
-              child: const IgnorePointer(
+            const Positioned.fill(
+              child: IgnorePointer(
                 child: Center(
                   child: Icon(Icons.add, size: 40, color: AppColors.error),
                 ),
@@ -1124,24 +1137,42 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
             ),
           ),
 
-          // Pick-location button — only when idle
-          if (_status == 'idle')
+          // Address / place search box — collapsed pill that expands
+          // into a results dropdown when the user types.
+          if (!_isPicking && !_isDrawingLap)
             Positioned(
-              top: safeTop + 8,
-              left: 72,
-              child: CircleAvatar(
-                backgroundColor: _isPicking ? AppColors.primary : AppColors.surface,
-                child: IconButton(
-                  icon: Icon(
-                    _isPicking ? Icons.check : Icons.pin_drop,
-                    color: _isPicking ? Colors.white : AppColors.textPrimary,
-                    size: 20,
-                  ),
-                  onPressed: _onPickLocationTap,
-                  tooltip: _isPicking ? 'Confirm Location' : 'Pick Location',
-                ),
+              top: safeTop + 60,
+              left: 0,
+              right: 0,
+              child: MapSearchBox(
+                near: _safeCurrentPos,
+                onPick: (place) {
+                  _mapController?.animateCamera(
+                    CameraUpdate.newLatLngZoom(place.location, 16),
+                  );
+                },
               ),
             ),
+
+          // Pick-location feature is hidden for now — keep code paths
+          // intact in case we re-enable manual location override later.
+          // if (_status == 'idle')
+          //   Positioned(
+          //     top: safeTop + 8,
+          //     left: 72,
+          //     child: CircleAvatar(
+          //       backgroundColor: _isPicking ? AppColors.primary : AppColors.surface,
+          //       child: IconButton(
+          //         icon: Icon(
+          //           _isPicking ? Icons.check : Icons.pin_drop,
+          //           color: _isPicking ? Colors.white : AppColors.textPrimary,
+          //           size: 20,
+          //         ),
+          //         onPressed: _onPickLocationTap,
+          //         tooltip: _isPicking ? 'Confirm Location' : 'Pick Location',
+          //       ),
+          //     ),
+          //   ),
 
           // Picking-mode hint banner
           if (_isPicking)
@@ -1207,13 +1238,13 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
             Positioned(
               top: safeTop + 8,
               right: 16,
-              child: _GpsChip(position: _currentPos),
+              child: _GpsChip(position: _safeCurrentPos),
             ),
 
-          // Map layout switch (default/satellite)
+          // Map layout switch (default/satellite) — bottom-left of map area
           Positioned(
-            top: safeTop + 110,
-            right: 16,
+            bottom: 16,
+            left: 16,
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
               decoration: BoxDecoration(
@@ -1238,124 +1269,12 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
             ),
           ),
 
-          // Direct lat,lng input locate bar
-          Positioned(
-            top: safeTop + 56,
-            left: 16,
-            right: 16,
-            child: Material(
-              color: AppColors.surface,
-              elevation: 2,
-              borderRadius: BorderRadius.circular(12),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _latLngController,
-                        textInputAction: TextInputAction.done,
-                        keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true,
-                          signed: true,
-                        ),
-                        onSubmitted: (_) => _locateByLatLngInput(),
-                        decoration: const InputDecoration(
-                          isDense: true,
-                          border: InputBorder.none,
-                          hintText: 'lat,lng',
-                        ),
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textPrimary,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.my_location,
-                          size: 20, color: AppColors.primary),
-                      onPressed: _locateByLatLngInput,
-                      visualDensity: VisualDensity.compact,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
+          // Direct lat,lng input bar removed by request — location is now
+          // chosen via the pin-drop button or by GPS auto-locate.
 
-          // Lap-pick floating toolbar
-          if (_isPickingLapPoints)
-            Positioned(
-              top: safeTop + 8,
-              left: 72,
-              right: 16,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: AppColors.surface,
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 8),
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        _lapWaypoints.isEmpty
-                            ? 'Drag map to position pin'
-                            : '${_lapWaypoints.length} point${_lapWaypoints.length == 1 ? '' : 's'} selected',
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
-                      ),
-                    ),
-                    if (_lapWaypoints.isNotEmpty)
-                      IconButton(
-                        icon: const Icon(Icons.undo, size: 20),
-                        onPressed: _undoLastLapPoint,
-                        tooltip: 'Undo last point',
-                        color: AppColors.textSecondary,
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                      ),
-                    const SizedBox(width: 8),
-                    IconButton(
-                      icon: const Icon(Icons.close, size: 20),
-                      onPressed: _cancelLapPick,
-                      tooltip: 'Cancel',
-                      color: AppColors.error,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                    ),
-                    const SizedBox(width: 8),
-                    ElevatedButton(
-                      onPressed: _lapWaypoints.length >= 2 ? _onFinishLapPick : null,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primary,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                      ),
-                      child: const Text('Done', style: TextStyle(fontWeight: FontWeight.w600)),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-
-          // Centered drop-pin while picking lap waypoints
-          if (_isPickingLapPoints)
-            Positioned(
-              left: 0,
-              right: 0,
-              top: _mapCenterY - 36, // shift up so pin tip sits at center
-              child: const IgnorePointer(
-                child: Center(
-                  child: Icon(Icons.location_pin,
-                      size: 40, color: AppColors.error),
-                ),
-              ),
-            ),
+          // Pick-points mode now uses tap-to-add (mirrors the AMap variant)
+          // and the controls live in the bottom panel — no centered pin or
+          // floating top toolbar is needed.
 
           // Draw-mode floating top toolbar (Clear / Cancel / Finish)
           if (_isDrawingLap)
@@ -1416,19 +1335,32 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
               ),
             ),
 
-          // Bottom panel — hidden while picking lap waypoints or drawing
-          if (!_isPickingLapPoints && !_isDrawingLap)
-            Positioned(
-              left: 0, right: 0, bottom: 0,
-              child: _buildBottomPanel(),
+          // Locate-me button — bottom-right of map area; recentres camera
+          // on the user's current location.
+          Positioned(
+            right: 16,
+            bottom: 16,
+            child: Material(
+              color: AppColors.surface,
+              shape: const CircleBorder(),
+              elevation: 4,
+              child: InkWell(
+                customBorder: const CircleBorder(),
+                onTap: _locateMe,
+                child: const Padding(
+                  padding: EdgeInsets.all(10),
+                  child: Icon(Icons.my_location,
+                      size: 22, color: AppColors.primary),
+                ),
+              ),
             ),
-
-          // Compact pick-mode bottom panel with the “Add Point” button
-          if (_isPickingLapPoints)
-            Positioned(
-              left: 0, right: 0, bottom: 0,
-              child: _buildLapPickBottomPanel(),
-            ),
+          ),
+        ],
+      ),
+          ),
+          // Bottom panel — hidden only while drawing. Pick-mode now uses
+          // the same panel and renders pick controls via _buildControls.
+          if (!_isDrawingLap) _buildBottomPanel(),
         ],
       ),
     );
@@ -1456,69 +1388,108 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
     );
   }
 
-  Widget _buildLapPickBottomPanel() {
-    final count = _lapWaypoints.length;
-    return Container(
-      padding: EdgeInsets.fromLTRB(
-          20, 18, 20, MediaQuery.of(context).padding.bottom + 16),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withValues(alpha: 0.1),
-              blurRadius: 10,
-              offset: const Offset(0, -2)),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.location_pin,
-                  color: AppColors.error, size: 18),
-              const SizedBox(width: 6),
-              Text(
-                'Drag map to position pin · $count point${count == 1 ? '' : 's'} added',
-                style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          SizedBox(
-            width: double.infinity,
-            height: 52,
-            child: ElevatedButton.icon(
-              onPressed: _addLapWaypointAtCenter,
-              icon: const Icon(Icons.add_location_alt,
-                  size: 22, color: Colors.white),
-              label: const Text('Add Point',
-                  style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.white)),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primary,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(26)),
+  Widget _buildPickControls() {
+    final n = _lapWaypoints.length;
+    final hasLoop = _closingLeg != null;
+    String hint;
+    if (_isFetchingRoute) {
+      hint = 'Snapping to road…';
+    } else if (n == 0) {
+      hint = 'Tap the map to add the first point';
+    } else if (n == 1) {
+      hint = 'Tap to add the next point ($n picked)';
+    } else if (!hasLoop) {
+      hint = 'Tap more points, or tap Confirm to close the loop ($n picked)';
+    } else {
+      hint = 'Loop closed · tap Done to save ($n waypoints)';
+    }
+    return Column(
+      children: [
+        Text(
+          hint,
+          style: const TextStyle(
+              fontSize: 13,
+              color: AppColors.textSecondary,
+              fontWeight: FontWeight.w500),
+        ),
+        const SizedBox(height: 10),
+        Row(children: [
+          Expanded(
+            child: SizedBox(
+              height: 48,
+              child: OutlinedButton.icon(
+                onPressed: _isFetchingRoute ? null : _cancelLapPick,
+                icon: const Icon(Icons.close, size: 18),
+                label: const Text('Cancel'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.textPrimary,
+                  side: BorderSide(
+                      color: AppColors.textSecondary.withValues(alpha: 0.5)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(24)),
+                ),
               ),
             ),
           ),
-          const SizedBox(height: 8),
-          Text(
-            count < 2
-                ? 'Add at least 2 points, then tap Done'
-                : 'Tap Done at the top to start the simulated lap',
-            style: const TextStyle(
-                fontSize: 12, color: AppColors.textSecondary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: SizedBox(
+              height: 48,
+              child: OutlinedButton.icon(
+                onPressed:
+                    (_isFetchingRoute || (n == 0 && !hasLoop))
+                        ? null
+                        : _undoLastLapPoint,
+                icon: const Icon(Icons.undo, size: 18),
+                label: const Text('Undo'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.primary,
+                  side: const BorderSide(color: AppColors.primary),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(24)),
+                ),
+              ),
+            ),
           ),
-        ],
-      ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: SizedBox(
+              height: 48,
+              child: hasLoop
+                  ? ElevatedButton.icon(
+                      onPressed: _isFetchingRoute ? null : _onDoneSaveLap,
+                      icon: const Icon(Icons.check, size: 20),
+                      label: const Text('Done'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(24)),
+                      ),
+                    )
+                  : ElevatedButton.icon(
+                      onPressed: (n < 2 || _isFetchingRoute)
+                          ? null
+                          : _onConfirmLoop,
+                      icon: _isFetchingRoute
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white))
+                          : const Icon(Icons.flag, size: 20),
+                      label: Text(_isFetchingRoute ? 'Building…' : 'Confirm'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(24)),
+                      ),
+                    ),
+            ),
+          ),
+        ]),
+      ],
     );
   }
 
@@ -1538,7 +1509,9 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
         children: [
           // Title
           Text(
-            _isLapRecordingMode ? 'Lap Recording' : 'Record Trail',
+            _isPickingLapPoints
+                ? 'Pick Waypoints'
+                : (_isLapRecordingMode ? 'Lap Recording' : 'Record Trail'),
             style: const TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.w700,
@@ -1578,14 +1551,14 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
                 ),
               ),
             ),
-          // Stats
-          Row(
-            children: [
-              _StatTile('Duration', _formatDuration(_durationSeconds)),
-              _StatTile('Distance', '${distance.toStringAsFixed(2)} km'),
-              _StatTile('Points', '${_points.length}'),
-            ],
-          ),
+          if (!_isPickingLapPoints)
+            Row(
+              children: [
+                _StatTile('Duration', _formatDuration(_durationSeconds)),
+                _StatTile('Distance', '${distance.toStringAsFixed(2)} km'),
+                _StatTile('Points', '${_points.length}'),
+              ],
+            ),
           const SizedBox(height: 20),
           if (_errorMessage != null)
             Padding(
@@ -1619,6 +1592,9 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
   }
 
   Widget _buildControls() {
+    if (_isPickingLapPoints) {
+      return _buildPickControls();
+    }
     switch (_status) {
       case 'idle':
         return Column(
@@ -1681,7 +1657,7 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
                 onPressed: _isPickingLapPoints ? null : _enterLapPickMode,
                 icon: const Icon(Icons.touch_app, size: 20),
                 label: const Text(
-                  'Simulate Lap (pick points)',
+                  'Pick Points → Auto-Run',
                   style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
                 ),
                 style: OutlinedButton.styleFrom(

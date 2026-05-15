@@ -12,10 +12,10 @@ class GarageScreen extends StatefulWidget {
   const GarageScreen({super.key});
 
   @override
-  State<GarageScreen> createState() => _GarageScreenState();
+  State<GarageScreen> createState() => GarageScreenState();
 }
 
-class _GarageScreenState extends State<GarageScreen> {
+class GarageScreenState extends State<GarageScreen> {
   late List<EBike> _bikes = [];
   bool _isLoading = true;
   String? _errorMessage;
@@ -25,6 +25,9 @@ class _GarageScreenState extends State<GarageScreen> {
     super.initState();
     _loadBikes();
   }
+
+  /// Public refresh hook invoked by the bottom-nav.
+  Future<void> refresh() => _loadBikes();
 
   Future<void> _loadBikes() async {
     setState(() {

@@ -1,0 +1,13 @@
+// AMap iOS SDK Key. NOT committed — see .gitignore.
+//
+// Setup:
+//   1. Copy this file:
+//        cp ios/Flutter/AmapKey.xcconfig.example ios/Flutter/AmapKey.xcconfig
+//   2. Edit ios/Flutter/AmapKey.xcconfig and paste your iOS SDK Key from
+//      https://lbs.amap.com/ → 应用管理 → 我的应用.
+//   3. Run `pod install` (cd ios && pod install) once after first setup.
+//
+// The key is read by ios/Runner/Info.plist via $(AMAP_IOS_SDK_KEY) and
+// handed to AMapServices in AppDelegate.swift.
+
+AMAP_IOS_SDK_KEY = PASTE_YOUR_IOS_SDK_KEY_HERE

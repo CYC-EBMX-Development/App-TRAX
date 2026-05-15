@@ -67,7 +67,8 @@ class _EbikeProfilePageState extends State<EbikeProfilePage> {
           slivers: [
             _buildAppBar(context),
             SliverPadding(
-              padding: const EdgeInsets.all(16),
+              padding: EdgeInsets.fromLTRB(
+                  16, 16, 16, 16 + MediaQuery.of(context).padding.bottom),
               sliver: SliverList(
                 delegate: SliverChildListDelegate([
                   _buildConnectionStatus(),

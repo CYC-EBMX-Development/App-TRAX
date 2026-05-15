@@ -14,6 +14,7 @@ public class TrailDto {
     private String imageUrl;
     private Double distance;
     private Double elevation;
+    private Double elevationDiff;
     private String type;
     private Long creatorId;
     private String creatorName;
@@ -35,6 +36,7 @@ public class TrailDto {
         dto.imageUrl = t.getImageUrl();
         dto.distance = t.getDistance();
         dto.elevation = t.getElevation();
+        dto.elevationDiff = t.getElevationDiff();
         dto.type = t.getType();
         dto.creatorId = t.getCreatorId();
         dto.startLatitude = t.getStartLatitude();
@@ -72,6 +74,8 @@ public class TrailDto {
     public void setDistance(Double distance) { this.distance = distance; }
     public Double getElevation() { return elevation; }
     public void setElevation(Double elevation) { this.elevation = elevation; }
+    public Double getElevationDiff() { return elevationDiff; }
+    public void setElevationDiff(Double elevationDiff) { this.elevationDiff = elevationDiff; }
     public String getType() { return type; }
     public void setType(String type) { this.type = type; }
     public Long getCreatorId() { return creatorId; }

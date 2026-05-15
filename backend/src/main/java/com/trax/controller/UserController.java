@@ -7,6 +7,7 @@ import com.trax.service.UserService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
@@ -24,13 +25,15 @@ import java.util.Map;
 @RequestMapping("/api/users")
 public class UserController {
     private static final Logger logger = LoggerFactory.getLogger(UserController.class);
-    // Mirrors ImageController.IMAGES_DIR. Avatars are stored under <IMAGES_DIR>/avatars
+    // Mirrors ImageController.imagesDir. Avatars are stored under <imagesDir>/avatars
     // and served by ImageController via GET /images/avatars/<file>.
-    private static final String IMAGES_DIR = "/Users/cyc_joshua/Documents/CYC/TRAX/App-TRAX/backend/images";
     private static final String AVATAR_SUBDIR = "avatars";
     private static final long MAX_AVATAR_BYTES = 5L * 1024 * 1024; // 5 MB
 
     private final UserService userService;
+
+    @Value("${app.images.dir:/Users/cyc_joshua/Documents/CYC/TRAX/App-TRAX/backend/images}")
+    private String imagesDir;
 
     public UserController(UserService userService) {
         this.userService = userService;
@@ -74,7 +77,7 @@ public class UserController {
             if (e.matches("png|jpg|jpeg|webp|gif")) ext = e.equals("jpeg") ? "jpg" : e;
         }
         try {
-            Path dir = Paths.get(IMAGES_DIR, AVATAR_SUBDIR);
+            Path dir = Paths.get(imagesDir, AVATAR_SUBDIR);
             Files.createDirectories(dir);
             String filename = "u" + principal.getId() + "_" + System.currentTimeMillis() + "." + ext;
             Path target = dir.resolve(filename);

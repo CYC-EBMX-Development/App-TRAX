@@ -1,8 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
-import '../../common/utils/map_gesture_recognizers.dart';
 import 'package:intl/intl.dart';
 
 import '../../common/network/trax_api.dart';
@@ -18,9 +16,10 @@ import '../../models/ride_lap.dart';
 import '../../models/trail.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/lap_splits_grid.dart';
-import 'race_replay_page.dart';
-import 'race_tracking_page.dart';
-import 'trail_checkpoints_page.dart';
+import '../../common/widgets/map_router.dart';
+import '../../common/widgets/race_live_mini_map.dart';
+import '../../common/widgets/route_preview_map.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart' as gmap;
 import 'trail_picker_page.dart';
 import 'package:trax_app/common/widgets/page_code_badge.dart';
 
@@ -38,7 +37,6 @@ class _RaceDetailPageState extends State<RaceDetailPage> {
   RaceLiveData? _liveData;
   bool _loading = true;
   Timer? _pollTimer;
-  GoogleMapController? _mapCtrl;
   int? _selectedBikeId;
   bool _bikePrefilled = false;
   bool _infoExpanded = true;
@@ -53,6 +51,11 @@ class _RaceDetailPageState extends State<RaceDetailPage> {
   _RaceTab _raceTab = _RaceTab.leaderboard;
   bool _showMockRaceRiders = false;
   List<RiderLiveInfo>? _mockRaceRiders;
+
+  // Trail polyline shown above the lobby (waiting/preparing) so all
+  // participants can see, drag and zoom the route while they wait.
+  List<gmap.LatLng> _trailRoute = const [];
+  int? _trailRouteForTrailId;
 
   // Rider colors for map markers / labels
   static const _riderColors = [
@@ -88,7 +91,6 @@ class _RaceDetailPageState extends State<RaceDetailPage> {
   @override
   void dispose() {
     _pollTimer?.cancel();
-    _mapCtrl?.dispose();
     super.dispose();
   }
 
@@ -118,6 +120,7 @@ class _RaceDetailPageState extends State<RaceDetailPage> {
       _loading = false;
     });
     _prefillBikeIfNeeded();
+    _ensureTrailRouteLoaded();
     _startPolling();
   }
 
@@ -159,6 +162,7 @@ class _RaceDetailPageState extends State<RaceDetailPage> {
     if (rResp.isSuccess() && rResp.data != null) {
       setState(() => _race = Race.fromJson(rResp.data as Map<String, dynamic>));
       _prefillBikeIfNeeded();
+      _ensureTrailRouteLoaded();
     }
 
     // If in_progress or completed, fetch live data
@@ -186,9 +190,7 @@ class _RaceDetailPageState extends State<RaceDetailPage> {
     final resp = await TraxApi.startRaceEvent(widget.raceId);
     if (!mounted) return;
     if (resp.isSuccess()) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => RaceTrackingPage(raceId: widget.raceId)),
-      );
+      MapRouter.openRaceTracking(context, raceId: widget.raceId, replace: true);
     } else {
       showTraxSnackBar(context, resp.message, isError: true);
     }
@@ -366,8 +368,13 @@ class _RaceDetailPageState extends State<RaceDetailPage> {
     final race = _race!;
     return Column(
       children: [
-        // Map area (only during in_progress / completed)
-        if (race.isInProgress || race.isCompleted) _buildMap(),
+        // Map area:
+        //  - waiting/preparing: trail preview (drag + zoom)
+        //  - in_progress/completed: live race mini-map
+        if (race.isInProgress || race.isCompleted)
+          _buildMap()
+        else if (race.trailId != null)
+          _buildLobbyTrailMap(race),
         // Bottom scrollable content
         Expanded(
           child: ListView(
@@ -411,52 +418,73 @@ class _RaceDetailPageState extends State<RaceDetailPage> {
   // ── Map ────────────────────────────────────────────────
 
   Widget _buildMap() {
-    Set<Marker> markers = {};
+    final riders = <RaceLiveRider>[];
     if (_liveData != null) {
       for (int i = 0; i < _liveData!.riders.length; i++) {
         final r = _liveData!.riders[i];
-        if (r.latitude == 0 && r.longitude == 0) continue;
-        final color = _riderColors[i % _riderColors.length];
-        markers.add(Marker(
-          markerId: MarkerId('rider_${r.userId}'),
-          position: LatLng(r.latitude, r.longitude),
-          icon: BitmapDescriptor.defaultMarkerWithHue(_hueFromColor(color)),
-          infoWindow: InfoWindow(
-            title: r.userName ?? 'Rider ${i + 1}',
-            snippet: 'Lap ${r.completedLaps}/${_race!.targetLaps} · ${r.distanceKm.toStringAsFixed(1)} km',
-          ),
+        riders.add(RaceLiveRider(
+          userId: r.userId,
+          name: r.userName ?? 'Rider ${i + 1}',
+          latitude: r.latitude,
+          longitude: r.longitude,
+          completedLaps: r.completedLaps,
+          distanceKm: r.distanceKm,
+          color: _riderColors[i % _riderColors.length],
         ));
       }
     }
+    return RaceLiveMiniMap(
+      riders: riders,
+      targetLaps: _race?.targetLaps ?? 0,
+    );
+  }
 
-    final initialPos = markers.isNotEmpty
-        ? markers.first.position
-        : const LatLng(22.89810, 113.86990);
-
+  /// Trail preview shown above the lobby (waiting / preparing). Drag-able
+  /// and zoom-able so participants can inspect the route while they wait.
+  Widget _buildLobbyTrailMap(Race race) {
+    if (_trailRoute.isEmpty) {
+      return Container(
+        height: 220,
+        color: AppColors.surface,
+        alignment: Alignment.center,
+        child: const SizedBox(
+          width: 22,
+          height: 22,
+          child: CircularProgressIndicator(
+              strokeWidth: 2.4, color: AppColors.primary),
+        ),
+      );
+    }
     return SizedBox(
-      height: 250,
-      child: GoogleMap(
-        initialCameraPosition: CameraPosition(target: initialPos, zoom: 15),
-        markers: markers,
-        onMapCreated: (c) => _mapCtrl = c,
-        myLocationEnabled: false,
-        zoomControlsEnabled: false,
-        mapToolbarEnabled: false,
-        gestureRecognizers: kMapGestureRecognizers,
+      height: 240,
+      child: RoutePreviewMap(
+        route: _trailRoute,
+        gesturesEnabled: true,
       ),
     );
   }
 
-  double _hueFromColor(Color c) {
-    if (c == Colors.blue) return BitmapDescriptor.hueBlue;
-    if (c == Colors.red) return BitmapDescriptor.hueRed;
-    if (c == Colors.green) return BitmapDescriptor.hueGreen;
-    if (c == Colors.purple) return BitmapDescriptor.hueViolet;
-    if (c == Colors.orange) return BitmapDescriptor.hueOrange;
-    if (c == Colors.teal) return BitmapDescriptor.hueCyan;
-    if (c == Colors.pink) return BitmapDescriptor.hueRose;
-    if (c == Colors.indigo) return BitmapDescriptor.hueBlue;
-    return BitmapDescriptor.hueRed;
+  Future<void> _ensureTrailRouteLoaded() async {
+    final race = _race;
+    if (race == null) return;
+    final tid = race.trailId;
+    if (tid == null) return;
+    if (_trailRouteForTrailId == tid && _trailRoute.isNotEmpty) return;
+    final resp = await TraxApi.getTrailPoints(tid);
+    if (!mounted) return;
+    if (!resp.isSuccess() || resp.data is! List) return;
+    final pts = <gmap.LatLng>[];
+    for (final p in resp.data as List) {
+      final m = p as Map<String, dynamic>;
+      pts.add(gmap.LatLng(
+        (m['latitude'] as num).toDouble(),
+        (m['longitude'] as num).toDouble(),
+      ));
+    }
+    setState(() {
+      _trailRoute = pts;
+      _trailRouteForTrailId = tid;
+    });
   }
 
   // ── Info Card ──────────────────────────────────────────
@@ -826,12 +854,11 @@ class _RaceDetailPageState extends State<RaceDetailPage> {
             ),
           ),
           ElevatedButton(
-            onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-              builder: (_) => TrailCheckpointsPage(
-                trailId: race.trailId!,
-                trailName: race.trailName,
-              ),
-            )),
+            onPressed: () => MapRouter.openTrailCheckpoints(
+              context,
+              trailId: race.trailId!,
+              trailName: race.trailName,
+            ),
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primary,
               foregroundColor: Colors.white,
@@ -2534,9 +2561,7 @@ class _RaceDetailPageState extends State<RaceDetailPage> {
   }
 
   void _onEnterTracking() {
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => RaceTrackingPage(raceId: widget.raceId)),
-    );
+    MapRouter.openRaceTracking(context, raceId: widget.raceId, replace: true);
   }
 
   void _onReplayRace() async {
@@ -2548,16 +2573,13 @@ class _RaceDetailPageState extends State<RaceDetailPage> {
       _liveData = RaceLiveData.fromJson(lResp.data as Map<String, dynamic>);
     }
     if (_liveData == null) return;
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => RaceReplayPage(
-          raceName: _race?.name ?? 'Race Replay',
-          targetLaps: _race?.targetLaps ?? 0,
-          riders: _liveData!.riders,
-          isLaps: _race?.isLaps ?? false,
-          trailId: _race?.trailId,
-        ),
-      ),
+    MapRouter.openRaceReplay(
+      context,
+      raceName: _race?.name ?? 'Race Replay',
+      targetLaps: _race?.targetLaps ?? 0,
+      riders: _liveData!.riders,
+      isLaps: _race?.isLaps ?? false,
+      trailId: _race?.trailId,
     );
   }
 

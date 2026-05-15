@@ -1,16 +1,15 @@
 import 'package:flutter/material.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
-import '../../common/utils/map_gesture_recognizers.dart';
-import '../../common/utils/start_end_marker_icons.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart' show LatLng;
 import 'package:intl/intl.dart';
 import '../../models/ride_record.dart';
 import '../../models/ride_lap.dart';
 import '../../common/network/trax_api.dart';
+import '../../common/widgets/route_preview_map.dart';
 import '../../common/widgets/trax_dialog.dart';
 import '../../common/widgets/trax_refresh_button.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/lap_splits_grid.dart';
-import 'ride_replay_page.dart';
+import '../../common/widgets/map_router.dart';
 import 'package:trax_app/common/widgets/page_code_badge.dart';
 
 class RideDetailPage extends StatefulWidget {
@@ -150,91 +149,55 @@ class _RideDetailPageState extends State<RideDetailPage> {
 
     return Scaffold(
       backgroundColor: AppColors.background,
-      body: CustomScrollView(
-        slivers: [
-          SliverAppBar(
-            expandedHeight: 280,
-            pinned: true,
-            title: traxTitle('Ride Detail'),
-            actions: [
-              if (_route.length >= 2)
-                Container(
-                  margin: const EdgeInsets.only(right: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.9),
-                    shape: BoxShape.circle,
-                  ),
-                  child: IconButton(
-                    icon: const Icon(Icons.play_circle_outline, color: AppColors.primary),
-                    tooltip: 'Replay Ride',
-                    onPressed: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => RideReplayPage(
-                            points: _rawPoints,
-                            rideName: ride.trailName ?? ride.bicycleName ?? 'Ride',
-                            laps: _laps,
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              Container(
-                margin: const EdgeInsets.only(right: 4),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.9),
-                  shape: BoxShape.circle,
-                ),
-                child: IconButton(
-                  icon: const Icon(Icons.delete_outline, color: AppColors.error),
-                  onPressed: _confirmDelete,
-                ),
+      appBar: AppBar(
+        title: traxTitle('Ride Detail'),
+        actions: [
+          if (_route.length >= 2)
+            Container(
+              margin: const EdgeInsets.only(right: 4),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.9),
+                shape: BoxShape.circle,
               ),
-            ],
-            flexibleSpace: FlexibleSpaceBar(
-              background: _route.isNotEmpty
-                  ? GoogleMap(
-                      initialCameraPosition: CameraPosition(
-                        target: _route[_route.length ~/ 2],
-                        zoom: 14,
-                      ),
-                      polylines: {
-                        Polyline(
-                          polylineId: const PolylineId('route'),
-                          points: _route,
-                          color: AppColors.primary,
-                          width: 4,
-                        ),
-                      },
-                      markers: {
-                        if (_route.isNotEmpty)
-                          Marker(
-                            markerId: const MarkerId('start'),
-                            position: _route.first,
-                            icon: StartEndMarkerIcons.start,
-                          ),
-                        if (_route.length > 1)
-                          Marker(
-                            markerId: const MarkerId('end'),
-                            position: _route.last,
-                            icon: StartEndMarkerIcons.finish,
-                          ),
-                      },
-                      myLocationEnabled: false,
-                      zoomControlsEnabled: false,
-                      gestureRecognizers: kMapGestureRecognizers,
-                    )
-                  : Container(
-                      color: AppColors.background,
-                      child: const Center(
-                        child: Icon(Icons.map_outlined, size: 64, color: AppColors.textSecondary),
-                      ),
-                    ),
+              child: IconButton(
+                icon: const Icon(Icons.play_circle_outline, color: AppColors.primary),
+                tooltip: 'Replay Ride',
+                onPressed: () {
+                  MapRouter.openRideReplay(
+                    context,
+                    points: _rawPoints,
+                    rideName: ride.trailName ?? ride.bicycleName ?? 'Ride',
+                    laps: _laps,
+                  );
+                },
+              ),
+            ),
+          Container(
+            margin: const EdgeInsets.only(right: 4),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.9),
+              shape: BoxShape.circle,
+            ),
+            child: IconButton(
+              icon: const Icon(Icons.delete_outline, color: AppColors.error),
+              onPressed: _confirmDelete,
             ),
           ),
-          SliverToBoxAdapter(
-            child: Padding(
+        ],
+      ),
+      body: Column(
+        children: [
+          SizedBox(
+            height: 240,
+            width: double.infinity,
+            child: RoutePreviewMap(
+              route: _route,
+              showStart: true,
+              showFinish: true,
+            ),
+          ),
+          Expanded(
+            child: SingleChildScrollView(
               padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,

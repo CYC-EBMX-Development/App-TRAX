@@ -14,7 +14,7 @@ class SessionScreen extends StatefulWidget {
   const SessionScreen({super.key});
 
   @override
-  State<SessionScreen> createState() => _SessionScreenState();
+  State<SessionScreen> createState() => SessionScreenState();
 }
 
 enum _RideTypeFilter { all, freeRide, lapTimer, race, laps }
@@ -24,7 +24,10 @@ bool _isLapsRace(RideRecord r) =>
 bool _isPureRace(RideRecord r) =>
     r.source == 'race' && (r.gameType ?? 'RACE').toUpperCase() != 'LAPS';
 
-class _SessionScreenState extends State<SessionScreen> {
+class SessionScreenState extends State<SessionScreen> {
+  /// Public refresh hook invoked by the bottom-nav.
+  Future<void> refresh() => _load();
+
   bool _isLoading = true;
   List<RideRecord> _rides = [];
   _RideTypeFilter _filter = _RideTypeFilter.all;

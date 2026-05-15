@@ -1,23 +1,26 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:dio/dio.dart';
 import '../../models/trail.dart';
 import '../../common/network/trax_api.dart';
+import '../../common/services/map_service.dart';
 import '../../common/utils/trail_thumbnail.dart';
 import '../../common/widgets/trax_refresh_button.dart';
 import '../../theme/app_theme.dart';
-import 'trail_detail_page.dart';
-import 'trail_record_page.dart';
+import '../../common/widgets/map_router.dart';
+// TrailRecordPage now routed via MapRouter.
 import 'package:trax_app/common/widgets/page_code_badge.dart';
 
 class TrailsScreen extends StatefulWidget {
   const TrailsScreen({super.key});
 
   @override
-  State<TrailsScreen> createState() => _TrailsScreenState();
+  State<TrailsScreen> createState() => TrailsScreenState();
 }
 
-class _TrailsScreenState extends State<TrailsScreen> {
+class TrailsScreenState extends State<TrailsScreen> {
+  /// Public refresh hook invoked by the bottom-nav.
+  Future<void> refresh() => _load();
+
   List<Trail> _trails = [];
   bool _isLoading = true;
 
@@ -45,9 +48,7 @@ class _TrailsScreenState extends State<TrailsScreen> {
   }
 
   Future<void> _goToRecordTrail() async {
-    final saved = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => const TrailRecordPage()),
-    );
+    final saved = await MapRouter.openTrailRecord(context);
     if (saved == true) _load();
   }
 
@@ -112,9 +113,7 @@ class _TrailsScreenState extends State<TrailsScreen> {
           child: _TrailCard(
             trail: _trails[index],
             onTap: () async {
-              final changed = await Navigator.of(context).push<bool>(
-                MaterialPageRoute(builder: (_) => TrailDetailPage(trail: _trails[index])),
-              );
+              final changed = await MapRouter.openTrailDetail(context, _trails[index]);
               if (changed == true) _load();
             },
           ),
@@ -140,8 +139,6 @@ class _TrailCardState extends State<_TrailCard> {
   Uint8List? _thumbBytes;
   bool _thumbFailed = false;
 
-  static const String _mapsApiKey = 'AIzaSyDmzdgVvZu4f5Q7zCKytQ5Syz0RLQzUxng';
-
   Trail get trail => widget.trail;
 
   @override
@@ -157,7 +154,7 @@ class _TrailCardState extends State<_TrailCard> {
   Future<void> _loadThumbnail() async {
     final id = int.tryParse(trail.id ?? '');
     if (id == null) return;
-    final result = await loadTrailThumbnail(id);
+    final result = await loadTrailThumbnail(id, serverImageUrl: trail.imageUrl);
     if (!mounted) return;
     if (result.bytes != null) {
       setState(() => _thumbBytes = result.bytes);
@@ -170,23 +167,10 @@ class _TrailCardState extends State<_TrailCard> {
     final lat = trail.startLatitude;
     final lng = trail.startLongitude;
     if (lat == null || lng == null) return;
-    try {
-      final resp = await Dio().get(
-        'https://maps.googleapis.com/maps/api/geocode/json',
-        queryParameters: {
-          'latlng': '$lat,$lng',
-          'key': _mapsApiKey,
-          'result_type': 'neighborhood|locality|sublocality|route',
-          'language': 'en',
-        },
-      );
-      final json = resp.data;
-      if (json['status'] == 'OK' && (json['results'] as List).isNotEmpty) {
-        if (mounted) {
-          setState(() => _location = json['results'][0]['formatted_address'] as String);
-        }
-      }
-    } catch (_) {}
+    final address = await MapService.reverseGeocode(lat, lng);
+    if (address != null && mounted) {
+      setState(() => _location = address);
+    }
   }
 
   Color _difficultyColor() {

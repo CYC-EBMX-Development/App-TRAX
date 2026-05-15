@@ -5,6 +5,8 @@ import '../../common/utils/map_gesture_recognizers.dart';
 import '../../common/utils/cp_marker_icons.dart';
 import '../../common/utils/ride_checkpoints.dart';
 import '../../common/utils/start_end_marker_icons.dart';
+import '../../common/utils/avatar_marker_icons.dart';
+import '../../common/global/global_user_info.dart';
 import '../../models/ride_lap.dart';
 import '../../common/widgets/trax_refresh_button.dart';
 import '../../theme/app_theme.dart';
@@ -42,10 +44,28 @@ class _RideReplayPageState extends State<RideReplayPage> {
   late final List<DateTime> _timestamps;
   late final List<double> _speeds; // km/h
 
+  // Self-avatar marker for the replay dot.
+  BitmapDescriptor? _riderIcon;
+
   @override
   void initState() {
     super.initState();
     _parsePoints();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _warmRiderIcon());
+  }
+
+  Future<void> _warmRiderIcon() async {
+    final u = GlobalUserInfo.instance;
+    final url = u.avatar.value;
+    final name = u.name.value;
+    final icon = await AvatarMarkerIcons.build(
+      context,
+      avatarUrl: url.isEmpty ? null : url,
+      name: name,
+      color: AppColors.primary,
+      isMe: true,
+    );
+    if (mounted) setState(() => _riderIcon = icon);
   }
 
   @override
@@ -247,7 +267,10 @@ class _RideReplayPageState extends State<RideReplayPage> {
                     Marker(
                       markerId: const MarkerId('rider'),
                       position: currentPos,
-                      icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+                      icon: _riderIcon ??
+                          BitmapDescriptor.defaultMarkerWithHue(
+                              BitmapDescriptor.hueAzure),
+                      anchor: const Offset(0.5, 0.5),
                       infoWindow: InfoWindow(
                         title: '${currentSpeed.toStringAsFixed(1)} km/h',
                       ),

@@ -28,6 +28,11 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // AMap Android SDK key is read from the env var AMAP_ANDROID_SDK_KEY.
+        // Sourced by scripts/run_android.sh + scripts/build_apk.sh from
+        // ~/trax-deploy.env so it never gets committed.
+        manifestPlaceholders["AMAP_ANDROID_SDK_KEY"] =
+            (System.getenv("AMAP_ANDROID_SDK_KEY") ?: "")
     }
 
     buildTypes {
@@ -35,10 +40,26 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
 }
 
 flutter {
     source = "../.."
+}
+
+// AMap native SDKs.
+// The amap_flutter_map / amap_flutter_location plugins declare these as
+// `compileOnly`, so the app must bring them in at runtime. The 3D map AAR
+// already bundles the location classes (com.amap.api.location.*), so we do
+// NOT add the separate location artifact — that would cause duplicate-class
+// errors at D8 time.
+dependencies {
+    implementation("com.amap.api:3dmap:9.7.0")
 }

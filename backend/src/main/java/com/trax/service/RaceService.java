@@ -143,7 +143,10 @@ public class RaceService {
 
     @Transactional
     public RaceDto joinByCode(String joinCode, Long userId, String role, Long bicycleId) {
-        Race race = raceRepo.findByJoinCode(joinCode.toUpperCase())
+        // Match only unstarted events. Codes are recyclable after a race
+        // ends, so a completed race with the same code must be ignored.
+        String code = joinCode == null ? "" : joinCode.trim();
+        Race race = raceRepo.findUnstartedByJoinCode(code)
                 .orElseThrow(() -> new RuntimeException("Invalid join code"));
         if ("observer".equals(role)) {
             return observeRace(race.getId(), userId);
@@ -735,16 +738,20 @@ public class RaceService {
     // ── Helpers ──────────────────────────────────────────
 
     private String generateJoinCode() {
-        String chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-        StringBuilder sb = new StringBuilder(6);
-        for (int i = 0; i < 6; i++) {
-            sb.append(chars.charAt(ThreadLocalRandom.current().nextInt(chars.length())));
+        // 6-digit numeric code. Uniqueness is enforced ONLY against
+        // currently-unstarted events (waiting/preparing) so codes can be
+        // recycled once a race starts or completes.
+        String chars = "0123456789";
+        for (int attempt = 0; attempt < 50; attempt++) {
+            StringBuilder sb = new StringBuilder(6);
+            for (int i = 0; i < 6; i++) {
+                sb.append(chars.charAt(ThreadLocalRandom.current().nextInt(chars.length())));
+            }
+            String code = sb.toString();
+            if (!raceRepo.existsUnstartedByJoinCode(code)) {
+                return code;
+            }
         }
-        // Ensure uniqueness
-        String code = sb.toString();
-        if (raceRepo.findByJoinCode(code).isPresent()) {
-            return generateJoinCode(); // retry
-        }
-        return code;
+        throw new RuntimeException("Failed to generate a unique join code");
     }
 }

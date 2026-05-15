@@ -1,9 +1,6 @@
-import 'dart:io';
-import 'package:dio/dio.dart';
-import 'package:dio/io.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import '../../common/services/map_service.dart';
 import '../../common/utils/start_end_marker_icons.dart';
 import 'package:intl/intl.dart';
 import '../../models/trail.dart';
@@ -14,7 +11,7 @@ import '../../common/utils/trax_storage_util.dart';
 import '../../common/utils/map_gesture_recognizers.dart';
 import '../../common/widgets/trax_dialog.dart';
 import '../../theme/app_theme.dart';
-import '../ride/lap_timer_page.dart';
+import '../../common/widgets/map_router.dart';
 import 'package:trax_app/common/widgets/page_code_badge.dart';
 
 class TrailDetailPage extends StatefulWidget {
@@ -34,8 +31,6 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
 
   Trail get trail => widget.trail;
   bool get _isOwner => trail.creatorId == GlobalUserInfo.instance.id.value;
-
-  static const String _mapsApiKey = 'AIzaSyDmzdgVvZu4f5Q7zCKytQ5Syz0RLQzUxng';
 
   @override
   void initState() {
@@ -83,36 +78,11 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
     final lng = trail.startLongitude ?? (_route.isNotEmpty ? _route.first.longitude : null);
     if (lat == null || lng == null) return;
 
-    try {
-      final dio = Dio();
-      if (kDebugMode) {
-        (dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
-          final client = HttpClient();
-          client.findProxy = (uri) => 'PROXY 127.0.0.1:7897';
-          client.badCertificateCallback = (cert, host, port) => true;
-          return client;
-        };
-      }
-      final resp = await dio.get(
-        'https://maps.googleapis.com/maps/api/geocode/json',
-        queryParameters: {
-          'latlng': '$lat,$lng',
-          'key': _mapsApiKey,
-          'result_type': 'neighborhood|locality|sublocality|route',
-          'language': 'en',
-        },
-        options: Options(
-          connectTimeout: const Duration(seconds: 5),
-          receiveTimeout: const Duration(seconds: 8),
-        ),
-      );
-      final json = resp.data;
-      if (json['status'] == 'OK' && (json['results'] as List).isNotEmpty) {
-        final address = json['results'][0]['formatted_address'] as String;
-        if (mounted) setState(() => _locationName = address);
-        return;
-      }
-    } catch (_) {}
+    final address = await MapService.reverseGeocode(lat, lng);
+    if (address != null) {
+      if (mounted) setState(() => _locationName = address);
+      return;
+    }
     // Fallback: show coordinates so the UI doesn't stay stuck on "Loading..."
     if (mounted) {
       setState(() => _locationName =
@@ -207,65 +177,69 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
       },
       child: Scaffold(
       backgroundColor: AppColors.background,
-      body: CustomScrollView(
-        slivers: [
-          SliverAppBar(
-            expandedHeight: 280,
-            pinned: true,
-            leading: IconButton(
-              icon: const Icon(Icons.arrow_back),
-              onPressed: () => Navigator.of(context).pop(_changed),
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.of(context).pop(_changed),
+        ),
+        actions: [
+          if (_isOwner)
+            IconButton(
+              icon: const Icon(Icons.delete_outline, color: AppColors.error),
+              onPressed: _confirmDelete,
             ),
-            actions: [
-              if (_isOwner)
-                IconButton(
-                  icon: const Icon(Icons.delete_outline, color: AppColors.error),
-                  onPressed: _confirmDelete,
-                ),
-            ],
-            flexibleSpace: FlexibleSpaceBar(
-              background: _route.isNotEmpty
-                  ? GoogleMap(
-                      initialCameraPosition: CameraPosition(
-                        target: _route[_route.length ~/ 2],
-                        zoom: 14,
-                      ),
-                      polylines: {
-                        Polyline(
-                          polylineId: const PolylineId('trail'),
-                          points: _route,
-                          color: AppColors.primary,
-                          width: 4,
-                        ),
-                      },
-                      markers: {
-                        Marker(
-                          markerId: const MarkerId('start'),
-                          position: _route.first,
-                          icon: StartEndMarkerIcons.start,
-                        ),
-                        if (!isLap && _route.length > 1)
-                          Marker(
-                            markerId: const MarkerId('end'),
-                            position: _route.last,
-                            icon: StartEndMarkerIcons.finish,
-                          ),
-                      },
-                      myLocationEnabled: false,
-                      zoomControlsEnabled: false,
-                      gestureRecognizers: kMapGestureRecognizers,
-                    )
-                  : Container(
-                      color: AppColors.background,
-                      child: const Center(
-                        child: Icon(Icons.map_outlined, size: 64, color: AppColors.textSecondary),
-                      ),
+        ],
+      ),
+      body: Column(
+        children: [
+          // Fixed-height map header — using a SliverAppBar/FlexibleSpaceBar
+          // here would let the surrounding scroll view steal the map's
+          // pan/pinch gestures.
+          SizedBox(
+            height: 240,
+            width: double.infinity,
+            child: _route.isNotEmpty
+                ? GoogleMap(
+                    initialCameraPosition: CameraPosition(
+                      target: _route[_route.length ~/ 2],
+                      zoom: 14,
                     ),
-            ),
+                    polylines: {
+                      Polyline(
+                        polylineId: const PolylineId('trail'),
+                        points: _route,
+                        color: AppColors.primary,
+                        width: 4,
+                      ),
+                    },
+                    markers: {
+                      Marker(
+                        markerId: const MarkerId('start'),
+                        position: _route.first,
+                        icon: StartEndMarkerIcons.start,
+                      ),
+                      if (!isLap && _route.length > 1)
+                        Marker(
+                          markerId: const MarkerId('end'),
+                          position: _route.last,
+                          icon: StartEndMarkerIcons.finish,
+                        ),
+                    },
+                    myLocationEnabled: false,
+                    zoomControlsEnabled: false,
+                    gestureRecognizers: kMapGestureRecognizers,
+                  )
+                : Container(
+                    color: AppColors.background,
+                    child: const Center(
+                      child: Icon(Icons.map_outlined, size: 64, color: AppColors.textSecondary),
+                    ),
+                  ),
           ),
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
+          Expanded(
+            child: SingleChildScrollView(
+              padding: EdgeInsets.fromLTRB(
+                  16, 16, 16, 16 + MediaQuery.of(context).padding.bottom),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -538,13 +512,12 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
     if (targetLaps == null || targetLaps <= 0) return;
     if (!mounted) return;
 
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => LapTimerPage(
-        selectedBike: bike,
-        trail: trail,
-        targetLaps: targetLaps,
-      ),
-    ));
+    MapRouter.openLapTimer(
+      context,
+      selectedBike: bike,
+      trail: trail,
+      targetLaps: targetLaps,
+    );
   }
 
   Future<EBike?> _showBikePickerDialog(List<EBike> bikes) {
@@ -801,8 +774,20 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
           const SizedBox(height: 12),
           Row(
             children: [
+              _StatItem(
+                  Icons.swap_vert,
+                  'Elevation Diff',
+                  trail.elevationDiff != null
+                      ? '${trail.elevationDiff!.toStringAsFixed(0)} m'
+                      : '\u2014'),
               _StatItem(_typeIcon(), 'Type', _typeLabel()),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
               _StatItem(Icons.pin_drop, 'Points', '${_route.length}'),
+              const Expanded(child: SizedBox()),
             ],
           ),
         ],

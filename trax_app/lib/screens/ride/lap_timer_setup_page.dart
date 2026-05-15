@@ -14,7 +14,7 @@ import '../../models/ebike.dart';
 import '../../models/trail.dart';
 import '../../models/user_checkpoint.dart';
 import '../../theme/app_theme.dart';
-import 'lap_timer_page.dart';
+import '../../common/widgets/map_router.dart';
 
 /// Lap Timer Setup
 ///
@@ -352,14 +352,29 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
     for (final cp in _checkpoints) {
       if (!_cpMarkerCache.containsKey(cp.sequenceIndex)) {
         _cpMarkerCache[cp.sequenceIndex] =
-            await _buildNumberedMarker(cp.sequenceIndex);
+            await _buildNumberedMarker(cp.sequenceIndex, AppColors.primary);
         changed = true;
       }
     }
     if (changed && mounted) setState(() {});
   }
 
-  Future<BitmapDescriptor> _buildNumberedMarker(int seq) async {
+  // Numbered violet draft icon for the next CP about to be added.
+  BitmapDescriptor? _draftCpIcon;
+  int? _draftCpIconForSeq;
+  Future<void> _warmDraftIcon() async {
+    final nextSeq = _checkpoints.length + 1;
+    if (_draftCpIconForSeq == nextSeq && _draftCpIcon != null) return;
+    final icon =
+        await _buildNumberedMarker(nextSeq, const Color(0xFF8E24AA));
+    if (!mounted) return;
+    setState(() {
+      _draftCpIcon = icon;
+      _draftCpIconForSeq = nextSeq;
+    });
+  }
+
+  Future<BitmapDescriptor> _buildNumberedMarker(int seq, Color fill) async {
     final dpr = MediaQuery.of(context).devicePixelRatio;
     // Match the smaller circular badge style used for start/finish.
     final r = 11.0 * dpr;
@@ -372,7 +387,7 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
     canvas.drawCircle(
         Offset(cx, cy), r + borderW / 2, Paint()..color = Colors.white);
     canvas.drawCircle(
-        Offset(cx, cy), r, Paint()..color = AppColors.primary);
+        Offset(cx, cy), r, Paint()..color = fill);
     final tp = TextPainter(
       text: TextSpan(
         text: '$seq',
@@ -407,6 +422,7 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
       return;
     }
     setState(() => _isPickingCheckpoint = true);
+    _warmDraftIcon();
     // Re-fit so user sees the trail in the full-screen map.
     if (_trailRoute.isNotEmpty && _mapReady) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -449,6 +465,7 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
           _recomputeCheckpointTicks();
         });
         _warmCpMarkers();
+        _warmDraftIcon();
       } else {
         _toast(
             resp.message.isNotEmpty
@@ -475,6 +492,7 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
         _recomputeCheckpointTicks();
       });
       _warmCpMarkers();
+      _warmDraftIcon();
     } else {
       _toast(resp.message.isNotEmpty ? resp.message : 'Failed to delete',
           isError: true);
@@ -510,16 +528,14 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
   // ── Start Session ─────────────────────────────────────────
   void _onStartSession() {
     if (_selectedTrail == null) return;
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => LapTimerPage(
-          selectedBike: widget.selectedBike,
-          trail: _selectedTrail!,
-          targetLaps: _targetLaps,
-          startLocation: _pickedStart,
-          autoStart: true,
-        ),
-      ),
+    MapRouter.openLapTimer(
+      context,
+      selectedBike: widget.selectedBike,
+      trail: _selectedTrail!,
+      targetLaps: _targetLaps,
+      startLocation: _pickedStart,
+      autoStart: true,
+      replace: true,
     );
   }
 
@@ -966,7 +982,7 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
         children: [
           Row(
             children: [
-              _buildTrailThumb(id),
+              _buildTrailThumb(id, trail.imageUrl),
               const SizedBox(width: 10),
               Expanded(
                 child: Column(
@@ -1230,15 +1246,17 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
                 infoWindow:
                     InfoWindow(title: 'Checkpoint ${cp.sequenceIndex}'),
               ),
-            if (_trailRoute.length >= 2)
+            if (_trailRoute.length >= 2 && _checkpoints.length < 4)
               Marker(
                 markerId: const MarkerId('cp_draft'),
                 position: draftPos,
-                icon: BitmapDescriptor.defaultMarkerWithHue(
-                    BitmapDescriptor.hueViolet),
-                anchor: const Offset(0.5, 1.0),
+                icon: _draftCpIcon ??
+                    BitmapDescriptor.defaultMarkerWithHue(
+                        BitmapDescriptor.hueViolet),
+                anchor: const Offset(0.5, 0.5),
                 zIndex: 5,
-                infoWindow: const InfoWindow(title: 'New Checkpoint'),
+                infoWindow: InfoWindow(
+                    title: 'New Checkpoint ${_checkpoints.length + 1}'),
               ),
           },
           onMapCreated: (c) {
@@ -1533,7 +1551,7 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
     );
   }
 
-  Widget _buildTrailThumb(int? trailId) {
+  Widget _buildTrailThumb(int? trailId, [String? serverImageUrl]) {
     if (trailId == null) {
       return Container(
         width: 64, height: 64,
@@ -1553,7 +1571,7 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
       );
     }
     return FutureBuilder<TrailThumbnailResult>(
-      future: loadTrailThumbnail(trailId),
+      future: loadTrailThumbnail(trailId, serverImageUrl: serverImageUrl),
       builder: (context, snap) {
         if (snap.connectionState != ConnectionState.done) {
           return Container(
@@ -1813,7 +1831,7 @@ class _TrailPickerRow extends StatelessWidget {
         ),
         child: Row(
           children: [
-            _thumb(id),
+            _thumb(id, trail.imageUrl),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
@@ -1883,7 +1901,7 @@ class _TrailPickerRow extends StatelessWidget {
     );
   }
 
-  Widget _thumb(int? trailId) {
+  Widget _thumb(int? trailId, [String? serverImageUrl]) {
     if (trailId == null) {
       return Container(
         width: 56, height: 56,
@@ -1903,7 +1921,7 @@ class _TrailPickerRow extends StatelessWidget {
       );
     }
     return FutureBuilder<TrailThumbnailResult>(
-      future: loadTrailThumbnail(trailId),
+      future: loadTrailThumbnail(trailId, serverImageUrl: serverImageUrl),
       builder: (context, snap) {
         if (snap.connectionState != ConnectionState.done) {
           return Container(

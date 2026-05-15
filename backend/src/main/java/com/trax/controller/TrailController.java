@@ -48,6 +48,16 @@ public class TrailController {
         }
     }
 
+    /**
+     * Backfill thumbnails for trails whose imageUrl is null/empty.
+     * Safe to call repeatedly — only generates the missing ones.
+     */
+    @PostMapping("/backfill-thumbnails")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> backfillThumbnails() {
+        return ResponseEntity.ok(
+                ApiResponse.success(trailService.backfillMissingThumbnails()));
+    }
+
     @GetMapping("/{id}/points")
     public ResponseEntity<ApiResponse<List<Map<String, Object>>>> getTrailPoints(@PathVariable Long id) {
         List<Map<String, Object>> points = trailService.getTrailPoints(id).stream()

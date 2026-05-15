@@ -3,18 +3,17 @@ import '../../models/ebike.dart';
 import '../../models/race.dart';
 import '../../common/network/trax_api.dart';
 import '../../common/utils/trax_storage_util.dart';
+import '../../common/widgets/map_router.dart';
 import '../../common/widgets/trax_refresh_button.dart';
 import '../../services/active_ride_service.dart';
 import '../../theme/app_theme.dart';
-import 'free_ride_page.dart';
+import '../garage/trax_module_inquiry_page.dart';
 import 'host_laps_page.dart';
 import 'host_race_page.dart';
 import 'join_race_page.dart';
-import 'lap_timer_setup_page.dart';
 import 'my_events_page.dart';
 import 'observe_race_page.dart';
 import 'race_detail_page.dart';
-import 'race_tracking_page.dart';
 import 'package:trax_app/common/widgets/page_code_badge.dart';
 
 class RideScreen extends StatefulWidget {
@@ -129,7 +128,8 @@ class _RideScreenState extends State<RideScreen> {
                 await _loadUpcomingEvents();
               },
               child: ListView(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+                padding: EdgeInsets.fromLTRB(
+                    16, 8, 16, 32 + MediaQuery.of(context).padding.bottom),
                 children: [
                   _buildBikeSelector(),
                   const SizedBox(height: 16),
@@ -353,10 +353,9 @@ class _RideScreenState extends State<RideScreen> {
           TextButton(
             onPressed: () {
               if (_selectedBike == null) return;
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => FreeRidePage(selectedBike: _rideSvc.bike ?? _selectedBike!),
-                ),
+              MapRouter.openFreeRide(
+                context,
+                selectedBike: _rideSvc.bike ?? _selectedBike!,
               );
             },
             style: TextButton.styleFrom(
@@ -463,8 +462,9 @@ class _RideScreenState extends State<RideScreen> {
   }
 
   void _onRideModeTap(String mode, {bool blockByActive = false}) {
-    if (_selectedBike == null) {
-      showTraxSnackBar(context, 'Add a bike in Garage first');
+    // Watch Game is the only mode that doesn't require a bike.
+    if (_selectedBike == null && mode != 'Watch Game' && mode != 'Watch Race') {
+      _promptAddBike();
       return;
     }
     if (blockByActive && _hasActiveRide) {
@@ -472,9 +472,7 @@ class _RideScreenState extends State<RideScreen> {
       return;
     }
     if (mode == 'Free Ride') {
-      Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => FreeRidePage(selectedBike: _selectedBike!)),
-      );
+      MapRouter.openFreeRide(context, selectedBike: _selectedBike!);
       return;
     }
     if (mode == 'Lap Timer') {
@@ -510,9 +508,40 @@ class _RideScreenState extends State<RideScreen> {
 
   /// Open Lap Timer setup page where user picks trail, laps, and start location.
   void _startLapTimerFlow() {
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => LapTimerSetupPage(selectedBike: _selectedBike!),
-    ));
+    MapRouter.openLapTimerSetup(context, selectedBike: _selectedBike!);
+  }
+
+  /// Show a confirm dialog when the user taps a ride mode but has no bike
+  /// configured. On confirm, push the Add-a-new-bike flow and refresh on return.
+  Future<void> _promptAddBike() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('No bike configured'),
+        content: const Text(
+          'You need to add a bike before you can start riding. '
+          'Would you like to configure one now?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            style: TextButton.styleFrom(foregroundColor: AppColors.primary),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Confirm'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const TraxModuleInquiryPage()),
+    );
+    if (!mounted) return;
+    // Refresh bikes (and selected bike) after returning from the add-bike flow.
+    await _loadBikes();
   }
 
   // ── Active Race Card ───────────────────────────────────────
@@ -525,9 +554,7 @@ class _RideScreenState extends State<RideScreen> {
     return GestureDetector(
       onTap: () {
         if (canEnterTracking) {
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => RaceTrackingPage(raceId: race.id)),
-          ).then((_) => _loadUpcomingEvents());
+          MapRouter.openRaceTracking(context, raceId: race.id).then((_) => _loadUpcomingEvents());
         } else {
           Navigator.of(context).push(
             MaterialPageRoute(builder: (_) => RaceDetailPage(raceId: race.id)),
@@ -567,9 +594,7 @@ class _RideScreenState extends State<RideScreen> {
             TextButton(
               onPressed: () {
                 if (canEnterTracking) {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => RaceTrackingPage(raceId: race.id)),
-                  ).then((_) => _loadUpcomingEvents());
+                  MapRouter.openRaceTracking(context, raceId: race.id).then((_) => _loadUpcomingEvents());
                 } else {
                   Navigator.of(context).push(
                     MaterialPageRoute(builder: (_) => RaceDetailPage(raceId: race.id)),
@@ -664,9 +689,7 @@ class _RideScreenState extends State<RideScreen> {
       onTap: () {
         // Navigate to tracking page if preparing, otherwise detail page
         if (race.isPreparing && (isHosted || race.myRole == 'rider')) {
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => RaceTrackingPage(raceId: race.id)),
-          ).then((_) => _loadUpcomingEvents());
+          MapRouter.openRaceTracking(context, raceId: race.id).then((_) => _loadUpcomingEvents());
         } else {
           Navigator.of(context).push(
             MaterialPageRoute(builder: (_) => RaceDetailPage(raceId: race.id)),

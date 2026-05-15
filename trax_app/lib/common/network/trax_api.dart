@@ -7,15 +7,15 @@ import 'app_token_interceptor.dart';
 class TraxUrl {
   TraxUrl._();
 
-  // 优先读取 --dart-define=API_BASE_URL=...，未提供时回落到本机调试地址。
+  // 优先读取 --dart-define=API_BASE_URL=...，未提供时回落到生产地址。
   // release 包构建命令：
-  //   flutter build apk --release --dart-define=API_BASE_URL=http://43.153.210.122/api
+  //   flutter build apk --release --dart-define=API_BASE_URL=http://43.99.48.204/api
   static const String _apiBaseUrlOverride =
       String.fromEnvironment('API_BASE_URL', defaultValue: '');
   static String get baseUrlRelease =>
-      _apiBaseUrlOverride.isNotEmpty ? _apiBaseUrlOverride : 'http://localhost:8080/api';
+      _apiBaseUrlOverride.isNotEmpty ? _apiBaseUrlOverride : 'http://43.99.48.204/api';
   static String get baseUrlDebug =>
-      _apiBaseUrlOverride.isNotEmpty ? _apiBaseUrlOverride : 'http://localhost:8080/api';
+      _apiBaseUrlOverride.isNotEmpty ? _apiBaseUrlOverride : 'http://43.99.48.204/api';
 
   static const String loginWithPasswd = '/auth/loginByPwd';
   static const String sendCode = '/auth/send-code';
@@ -54,8 +54,8 @@ class TraxApi {
     _dio = Dio(
       BaseOptions(
         baseUrl: _isDebug ? TraxUrl.baseUrlDebug : TraxUrl.baseUrlRelease,
-        connectTimeout: const Duration(seconds: 10),
-        receiveTimeout: const Duration(seconds: 10),
+        connectTimeout: const Duration(seconds: 25),
+        receiveTimeout: const Duration(seconds: 25),
         headers: _TraxContentType.formHeaders,
         responseType: ResponseType.json,
       ),
@@ -63,6 +63,40 @@ class TraxApi {
     _dio.interceptors.addAll([
       AppTokenInterceptor(),
     ]);
+  }
+
+  /// Build a human-friendly message from a [DioException]. Prefers a
+  /// JSON `message` field from the backend body, then HTTP status, then
+  /// the Dio exception type/native message. Avoids returning the useless
+  /// "status: null, error: null" string seen in earlier builds.
+  static String _formatDioError(DioException e) {
+    final body = e.response?.data;
+    if (body is Map && body['message'] is String && (body['message'] as String).isNotEmpty) {
+      return body['message'] as String;
+    }
+    final status = e.response?.statusCode;
+    if (status != null) {
+      return 'HTTP $status: ${e.response?.statusMessage ?? e.message ?? "error"}';
+    }
+    String label;
+    switch (e.type) {
+      case DioExceptionType.connectionError:
+        label = 'Network unavailable';
+        break;
+      case DioExceptionType.cancel:
+        label = 'Request cancelled';
+        break;
+      case DioExceptionType.badCertificate:
+        label = 'TLS error';
+        break;
+      case DioExceptionType.badResponse:
+        label = 'Bad response';
+        break;
+      default:
+        label = 'Network error';
+    }
+    final detail = e.message ?? e.error?.toString();
+    return detail == null || detail.isEmpty ? label : '$label: $detail';
   }
 
   static Future<AppResponse> post(
@@ -74,15 +108,26 @@ class TraxApi {
   }) async {
     try {
       if (showLoading) TraxDialog.showLoading();
-      final resp = await _dio.post('$url$path', data: data, options: Options(headers: headers));
-      return AppResponse.fromJson(resp.data);
+      try {
+        final resp = await _dio.post('$url$path', data: data, options: Options(headers: headers));
+        return AppResponse.fromJson(resp.data);
+      } on DioException catch (e) {
+        // One silent retry on connect/receive timeout (cold-start TLS handshake
+        // can occasionally exceed the per-request budget).
+        if (e.type == DioExceptionType.connectionTimeout ||
+            e.type == DioExceptionType.receiveTimeout) {
+          final resp = await _dio.post('$url$path', data: data, options: Options(headers: headers));
+          return AppResponse.fromJson(resp.data);
+        }
+        rethrow;
+      }
     } catch (e) {
       if (e is DioException) {
         if (e.type == DioExceptionType.connectionTimeout ||
             e.type == DioExceptionType.receiveTimeout) {
           return AppResponse.error('Request timeout!');
         }
-        return AppResponse.error('status: ${e.response?.statusCode}, error: ${e.response?.statusMessage}');
+        return AppResponse.error(_formatDioError(e));
       }
       return AppResponse.error(e.toString());
     } finally {
@@ -99,15 +144,26 @@ class TraxApi {
   }) async {
     try {
       if (showLoading) TraxDialog.showLoading();
-      final resp = await _dio.get('$url$path', queryParameters: queryParameters, options: Options(headers: headers));
-      return AppResponse.fromJson(resp.data);
+      try {
+        final resp = await _dio.get('$url$path', queryParameters: queryParameters, options: Options(headers: headers));
+        return AppResponse.fromJson(resp.data);
+      } on DioException catch (e) {
+        // One silent retry on connect/receive timeout (cold-start TLS handshake
+        // can occasionally exceed the per-request budget).
+        if (e.type == DioExceptionType.connectionTimeout ||
+            e.type == DioExceptionType.receiveTimeout) {
+          final resp = await _dio.get('$url$path', queryParameters: queryParameters, options: Options(headers: headers));
+          return AppResponse.fromJson(resp.data);
+        }
+        rethrow;
+      }
     } catch (e) {
       if (e is DioException) {
         if (e.type == DioExceptionType.connectionTimeout ||
             e.type == DioExceptionType.receiveTimeout) {
           return AppResponse.error('Request timeout!');
         }
-        return AppResponse.error('status: ${e.response?.statusCode}, error: ${e.response?.statusMessage}');
+        return AppResponse.error(_formatDioError(e));
       }
       return AppResponse.error(e.toString());
     } finally {
@@ -180,7 +236,7 @@ class TraxApi {
       return AppResponse.fromJson(resp.data);
     } catch (e) {
       if (e is DioException) {
-        return AppResponse.error('status: ${e.response?.statusCode}, error: ${e.response?.statusMessage}');
+        return AppResponse.error(_formatDioError(e));
       }
       return AppResponse.error(e.toString());
     } finally {
@@ -203,7 +259,7 @@ class TraxApi {
       return AppResponse.fromJson(resp.data);
     } catch (e) {
       if (e is DioException) {
-        return AppResponse.error('status: ${e.response?.statusCode}, error: ${e.response?.statusMessage}');
+        return AppResponse.error(_formatDioError(e));
       }
       return AppResponse.error(e.toString());
     } finally {
@@ -234,7 +290,7 @@ class TraxApi {
                   e.type == DioExceptionType.receiveTimeout) {
                 return AppResponse.error('Request timeout!');
               }
-              return AppResponse.error('status: ${e.response?.statusCode}, error: ${e.response?.statusMessage}');
+              return AppResponse.error(_formatDioError(e));
             }
             return AppResponse.error(e.toString());
           });
@@ -248,7 +304,7 @@ class TraxApi {
                   e.type == DioExceptionType.receiveTimeout) {
                 return AppResponse.error('Request timeout!');
               }
-              return AppResponse.error('status: ${e.response?.statusCode}, error: ${e.response?.statusMessage}');
+              return AppResponse.error(_formatDioError(e));
             }
             return AppResponse.error(e.toString());
           });
@@ -274,7 +330,7 @@ class TraxApi {
             e.type == DioExceptionType.receiveTimeout) {
           return AppResponse.error('Request timeout!');
         }
-        return AppResponse.error('status: ${e.response?.statusCode}, error: ${e.response?.statusMessage}');
+        return AppResponse.error(_formatDioError(e));
       }
       return AppResponse.error(e.toString());
     } finally {
@@ -332,7 +388,7 @@ class TraxApi {
                   e.type == DioExceptionType.receiveTimeout) {
                 return AppResponse.error('Request timeout!');
               }
-              return AppResponse.error('status: ${e.response?.statusCode}, error: ${e.response?.statusMessage}');
+              return AppResponse.error(_formatDioError(e));
             }
             return AppResponse.error(e.toString());
           });
@@ -365,7 +421,7 @@ class TraxApi {
                   e.type == DioExceptionType.receiveTimeout) {
                 return AppResponse.error('Request timeout!');
               }
-              return AppResponse.error('status: ${e.response?.statusCode}, error: ${e.response?.statusMessage}');
+              return AppResponse.error(_formatDioError(e));
             }
             return AppResponse.error(e.toString());
           });
@@ -397,7 +453,7 @@ class TraxApi {
           .then((resp) => AppResponse.fromJson(resp.data))
           .catchError((e) {
             if (e is DioException) {
-              return AppResponse.error('status: ${e.response?.statusCode}, error: ${e.response?.statusMessage}');
+              return AppResponse.error(_formatDioError(e));
             }
             return AppResponse.error(e.toString());
           });

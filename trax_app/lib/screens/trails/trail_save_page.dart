@@ -1,10 +1,7 @@
-import 'dart:io';
 import 'dart:math';
-import 'package:dio/dio.dart';
-import 'package:dio/io.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import '../../common/services/map_service.dart';
 import '../../common/utils/map_gesture_recognizers.dart';
 import '../../common/utils/start_end_marker_icons.dart';
 import '../../common/network/trax_api.dart';
@@ -30,7 +27,6 @@ class _TrailSavePageState extends State<TrailSavePage> {
   bool _nameFieldFocused = false;
   String? _location;
 
-  static const String _mapsApiKey = 'AIzaSyDmzdgVvZu4f5Q7zCKytQ5Syz0RLQzUxng';
   final _difficulties = ['easy', 'medium', 'hard', 'extreme'];
 
   @override
@@ -52,32 +48,10 @@ class _TrailSavePageState extends State<TrailSavePage> {
   Future<void> _fetchLocation() async {
     if (widget.route.isEmpty) return;
     final pt = widget.route.first;
-    try {
-      final dio = Dio();
-      if (kDebugMode) {
-        (dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
-          final client = HttpClient();
-          client.findProxy = (uri) => 'PROXY 127.0.0.1:7897';
-          client.badCertificateCallback = (cert, host, port) => true;
-          return client;
-        };
-      }
-      final resp = await dio.get(
-        'https://maps.googleapis.com/maps/api/geocode/json',
-        queryParameters: {
-          'latlng': '${pt.latitude},${pt.longitude}',
-          'key': _mapsApiKey,
-          'result_type': 'neighborhood|locality|sublocality|route',
-          'language': 'en',
-        },
-      );
-      final json = resp.data;
-      if (json['status'] == 'OK' && (json['results'] as List).isNotEmpty) {
-        if (mounted) {
-          setState(() => _location = json['results'][0]['formatted_address'] as String);
-        }
-      }
-    } catch (_) {}
+    final address = await MapService.reverseGeocode(pt.latitude, pt.longitude);
+    if (address != null && mounted) {
+      setState(() => _location = address);
+    }
   }
 
   Future<void> _save() async {
@@ -115,52 +89,50 @@ class _TrailSavePageState extends State<TrailSavePage> {
   Widget _buildContent(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background,
-      body: CustomScrollView(
-        slivers: [
-          SliverAppBar(
-            expandedHeight: 240,
-            pinned: true,
-            title: const Text('Save Trail'),
-            flexibleSpace: FlexibleSpaceBar(
-              background: widget.route.isNotEmpty
-                  ? GoogleMap(
-                      initialCameraPosition: CameraPosition(
-                        target: widget.route[widget.route.length ~/ 2],
-                        zoom: 14,
-                      ),
-                      polylines: {
-                        Polyline(
-                          polylineId: const PolylineId('trail'),
-                          points: widget.route,
-                          color: AppColors.primary,
-                          width: 4,
-                        ),
-                      },
-                      markers: {
-                        Marker(
-                          markerId: const MarkerId('start'),
-                          position: widget.route.first,
-                          icon: StartEndMarkerIcons.start,
-                        ),
-                        if (widget.route.length > 1)
-                          Marker(
-                            markerId: const MarkerId('end'),
-                            position: widget.route.last,
-                            icon: StartEndMarkerIcons.finish,
-                          ),
-                      },
-                      myLocationEnabled: false,
-                      zoomControlsEnabled: false,
-                      gestureRecognizers: kMapGestureRecognizers,
-                    )
-                  : Container(
-                      color: AppColors.background,
-                      child: const Center(child: Icon(Icons.map_outlined, size: 64, color: AppColors.textSecondary)),
+      appBar: AppBar(title: const Text('Save Trail')),
+      body: Column(
+        children: [
+          SizedBox(
+            height: 220,
+            width: double.infinity,
+            child: widget.route.isNotEmpty
+                ? GoogleMap(
+                    initialCameraPosition: CameraPosition(
+                      target: widget.route[widget.route.length ~/ 2],
+                      zoom: 14,
                     ),
-            ),
+                    polylines: {
+                      Polyline(
+                        polylineId: const PolylineId('trail'),
+                        points: widget.route,
+                        color: AppColors.primary,
+                        width: 4,
+                      ),
+                    },
+                    markers: {
+                      Marker(
+                        markerId: const MarkerId('start'),
+                        position: widget.route.first,
+                        icon: StartEndMarkerIcons.start,
+                      ),
+                      if (widget.route.length > 1)
+                        Marker(
+                          markerId: const MarkerId('end'),
+                          position: widget.route.last,
+                          icon: StartEndMarkerIcons.finish,
+                        ),
+                    },
+                    myLocationEnabled: false,
+                    zoomControlsEnabled: false,
+                    gestureRecognizers: kMapGestureRecognizers,
+                  )
+                : Container(
+                    color: AppColors.background,
+                    child: const Center(child: Icon(Icons.map_outlined, size: 64, color: AppColors.textSecondary)),
+                  ),
           ),
-          SliverToBoxAdapter(
-            child: Padding(
+          Expanded(
+            child: SingleChildScrollView(
               padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,

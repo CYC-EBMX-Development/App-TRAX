@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Used by FileProvider to expose downloaded OTA APKs to the system
+         package installer. The cache directory is wiped automatically and
+         doesn't require any storage permissions. -->
+    <external-cache-path name="ota" path="."/>
+    <cache-path name="ota_internal" path="."/>
+</paths>

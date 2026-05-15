@@ -19,6 +19,7 @@ public class Trail {
     private String imageUrl;
     private Double distance;
     private Double elevation;
+    private Double elevationDiff;
     private String type; // free_ride, lap
     private Long creatorId;
     private Double startLatitude;
@@ -52,6 +53,8 @@ public class Trail {
     public void setDistance(Double distance) { this.distance = distance; }
     public Double getElevation() { return elevation; }
     public void setElevation(Double elevation) { this.elevation = elevation; }
+    public Double getElevationDiff() { return elevationDiff; }
+    public void setElevationDiff(Double elevationDiff) { this.elevationDiff = elevationDiff; }
     public String getType() { return type; }
     public void setType(String type) { this.type = type; }
     public Long getCreatorId() { return creatorId; }

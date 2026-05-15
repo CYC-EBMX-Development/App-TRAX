@@ -177,7 +177,8 @@ class _HostLapsPageState extends State<HostLapsPage> {
           ? const Center(
               child: CircularProgressIndicator(color: AppColors.primary))
           : ListView(
-              padding: const EdgeInsets.all(16),
+              padding: EdgeInsets.fromLTRB(
+                  16, 16, 16, 16 + MediaQuery.of(context).padding.bottom),
               children: [
                 _buildTextField('Session Name', _nameCtrl, 'e.g. Sunday Laps'),
                 const SizedBox(height: 16),
