@@ -15,6 +15,7 @@ import 'common/network/trax_api.dart';
 import 'common/utils/trax_storage_util.dart';
 import 'global.dart';
 import 'routers/trax_router.dart';
+import 'theme/app_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -145,6 +146,13 @@ class MyApp extends StatelessWidget {
           cursorColor: Color(0xFF333333),
           selectionColor: Color(0x33FFB800), // AppColors.primary @ ~20% alpha
           selectionHandleColor: Color(0xFFFFB800),
+        ),
+        // App-wide hint colour: medium gray so it never looks like
+        // real user input. Per-widget logic hides the hint while the
+        // field is focused.
+        inputDecorationTheme: const InputDecorationTheme(
+          hintStyle: TextStyle(color: AppColors.textSecondary),
+          labelStyle: TextStyle(color: AppColors.textSecondary),
         ),
       ),
       scrollBehavior: const CupertinoScrollBehavior(),

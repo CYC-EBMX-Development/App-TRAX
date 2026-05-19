@@ -30,7 +30,7 @@ public class RideService {
 
     // Lap detection thresholds
     private static final double OVERLAP_THRESHOLD_KM = 0.03; // 30m to count as "on trail"
-    private static final double LAP_MIN_EXCURSION_KM = 0.15;     // 150m away before lap can close
+    private static final double LAP_MIN_EXCURSION_KM = 0.05;     // 150m away before lap can close
     private static final long LAP_MIN_DURATION_SEC = 15;         // ignore noisy lap closures < 15s
     /** Radius (km) around a checkpoint within which a ride point counts as
      *  passing through that checkpoint. */

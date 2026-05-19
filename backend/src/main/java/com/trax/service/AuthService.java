@@ -58,6 +58,39 @@ public class AuthService {
         userRepository.save(user);
     }
 
+    /** Verify a password against the stored hash for the given user.
+     *  Throws if it does not match. Used by the in-app "Change Password"
+     *  wizard step 1 (verify current password before showing step 2). */
+    public void verifyPassword(Long userId, String password) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("Account not found"));
+        if (!passwordEncoder.matches(password, user.getPassword())) {
+            throw new RuntimeException("Current password is incorrect");
+        }
+    }
+
+    /**
+     * Change the password for an already-authenticated user. The caller
+     * must supply the current (old) password — we verify it matches the
+     * stored bcrypt hash before persisting the new password. Used by the
+     * in-app "Change Password" flow in Profile → Settings.
+     */
+    public void changePassword(Long userId, String oldPassword, String newPassword) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("Account not found"));
+        if (!passwordEncoder.matches(oldPassword, user.getPassword())) {
+            throw new RuntimeException("Current password is incorrect");
+        }
+        if (newPassword == null || newPassword.length() < 6) {
+            throw new RuntimeException("New password must be at least 6 characters");
+        }
+        if (passwordEncoder.matches(newPassword, user.getPassword())) {
+            throw new RuntimeException("New password must differ from the current one");
+        }
+        user.setPassword(passwordEncoder.encode(newPassword));
+        userRepository.save(user);
+    }
+
     private LoginData buildLoginData(User user) {
         String token = jwtUtil.generateToken(user.getEmail());
         UserDto userDto = new UserDto(user.getId(), user.getName(), user.getEmail(), AvatarUrls.versioned(user));

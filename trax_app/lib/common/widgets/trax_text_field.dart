@@ -35,6 +35,22 @@ class TraxTextField extends StatefulWidget {
 
 class _TraxTextFieldState extends State<TraxTextField> {
   bool _obscureText = true;
+  final FocusNode _focusNode = FocusNode();
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode.addListener(_onFocusChange);
+  }
+
+  @override
+  void dispose() {
+    _focusNode.removeListener(_onFocusChange);
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  void _onFocusChange() => setState(() {});
 
   @override
   Widget build(BuildContext context) {
@@ -47,6 +63,7 @@ class _TraxTextFieldState extends State<TraxTextField> {
           : null,
       child: TextFormField(
         autofocus: widget.autofocus,
+        focusNode: _focusNode,
         validator: widget.validator,
         controller: widget.controller,
         style: TextStyle(color: widget.textColor),
@@ -54,9 +71,12 @@ class _TraxTextFieldState extends State<TraxTextField> {
         cursorColor: Colors.black,
         decoration: InputDecoration(
           labelText: widget.labelText,
-          labelStyle: const TextStyle(color: Colors.black54),
-          hintText: widget.hintText,
-          hintStyle: const TextStyle(color: Colors.black54),
+          labelStyle: const TextStyle(color: Color(0xFF666666)),
+          // Hide the hint while the field is focused so users don't
+          // confuse the placeholder for real input. Use medium gray
+          // (never black) otherwise.
+          hintText: _focusNode.hasFocus ? null : widget.hintText,
+          hintStyle: const TextStyle(color: Color(0xFFAEAEAE)),
           filled: true,
           fillColor: widget.fillColor,
           errorStyle: const TextStyle(color: Color(0xFFFF0000)),

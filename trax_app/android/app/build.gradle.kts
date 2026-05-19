@@ -54,6 +54,25 @@ flutter {
     source = "../.."
 }
 
+// === OTA versioning override ============================================
+// We use an 8-digit YYMMDDNN versionCode (see scripts/build_apk.sh and
+// lib/common/services/app_update_service.dart). When --split-per-abi is
+// enabled, Flutter's gradle plugin auto-shifts versionCode by
+// +1000/+2000/+4000 per ABI so Play Store can treat them as distinct
+// uploads. That shift corrupts the "DD" digits of our scheme:
+//   base 26051805 → arm64-v8a output becomes 26053805,
+//   which the OTA client then renders as "260538-05".
+//
+// We self-distribute only the arm64-v8a slice via OTA, so there is no
+// uniqueness requirement. Force every split output back to the base
+// versionCode that --build-number passed in.
+android.applicationVariants.all {
+    outputs.all {
+        (this as com.android.build.gradle.internal.api.ApkVariantOutputImpl)
+            .versionCodeOverride = flutter.versionCode
+    }
+}
+
 // AMap native SDKs.
 // The amap_flutter_map / amap_flutter_location plugins declare these as
 // `compileOnly`, so the app must bring them in at runtime. The 3D map AAR

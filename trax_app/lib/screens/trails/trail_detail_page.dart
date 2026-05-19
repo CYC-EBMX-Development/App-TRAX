@@ -1,6 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/widgets.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../../common/services/map_service.dart';
+import '../../common/utils/chaser_dot_icon.dart';
+import '../../common/utils/polyline_chaser.dart';
 import '../../common/utils/start_end_marker_icons.dart';
 import 'package:intl/intl.dart';
 import '../../models/trail.dart';
@@ -29,6 +34,15 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
   late bool _isPublic;
   bool _changed = false;
 
+  GoogleMapController? _mapController;
+
+  // Direction-of-travel hint: a small blue dot slides along the route
+  // on a repeating timer, similar to an indeterminate progress bar.
+  PolylineChaser? _chaser;
+  BitmapDescriptor? _chaserDot;
+  Timer? _chaserTimer;
+  double _chaserPhase = 0;
+
   Trail get trail => widget.trail;
   bool get _isOwner => trail.creatorId == GlobalUserInfo.instance.id.value;
 
@@ -38,7 +52,62 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
     _isPublic = trail.isPublic;
     // Use stored location first, geocode as fallback
     _locationName = trail.location;
+    _loadChaserDot();
     _loadPoints();
+  }
+
+  @override
+  void dispose() {
+    _chaserTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadChaserDot() async {
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    final dpr = views.isNotEmpty ? views.first.devicePixelRatio : 3.0;
+    final icon = await ChaserDotIcon.bitmap(dpr);
+    if (!mounted) return;
+    setState(() => _chaserDot = icon);
+  }
+
+  void _startChaser() {
+    _chaserTimer?.cancel();
+    if (_route.length < 3) return;
+    _chaser = PolylineChaser(_route);
+    // ~20fps, full loop every ~22.5s.
+    _chaserTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
+      if (!mounted) return;
+      setState(() => _chaserPhase = (_chaserPhase + 0.00222) % 1.0);
+    });
+  }
+
+  /// Frame the whole route in the 240 px-tall map header so a long
+  /// trail isn't shown as a tiny squiggle next to the centre pin. Runs
+  /// once the map controller is available and the route has loaded.
+  void _fitRouteBounds() {
+    final ctrl = _mapController;
+    if (ctrl == null || _route.isEmpty) return;
+    if (_route.length == 1) {
+      ctrl.animateCamera(CameraUpdate.newLatLngZoom(_route.first, 16));
+      return;
+    }
+    double minLat = _route.first.latitude, maxLat = _route.first.latitude;
+    double minLng = _route.first.longitude, maxLng = _route.first.longitude;
+    for (final p in _route) {
+      if (p.latitude < minLat) minLat = p.latitude;
+      if (p.latitude > maxLat) maxLat = p.latitude;
+      if (p.longitude < minLng) minLng = p.longitude;
+      if (p.longitude > maxLng) maxLng = p.longitude;
+    }
+    ctrl.animateCamera(
+      CameraUpdate.newLatLngBounds(
+        LatLngBounds(
+          southwest: LatLng(minLat, minLng),
+          northeast: LatLng(maxLat, maxLng),
+        ),
+        40,
+      ),
+    );
   }
 
   Future<void> _loadPoints() async {
@@ -66,6 +135,8 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
       _route = route;
       _isLoading = false;
     });
+    _startChaser();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _fitRouteBounds());
 
     // Only geocode if location not already stored in DB
     if (_locationName == null || _locationName!.isEmpty) {
@@ -208,8 +279,8 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
                       Polyline(
                         polylineId: const PolylineId('trail'),
                         points: _route,
-                        color: AppColors.primary,
-                        width: 4,
+                        color: AppColors.primary.withValues(alpha: 0.9),
+                        width: 2,
                       ),
                     },
                     markers: {
@@ -224,10 +295,28 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
                           position: _route.last,
                           icon: StartEndMarkerIcons.finish,
                         ),
+                      if (_chaserDot != null && (_chaser?.canRender ?? false))
+                        Marker(
+                          markerId: const MarkerId('trail_chaser'),
+                          position: _chaser!.headAt(_chaserPhase),
+                          icon: _chaserDot!,
+                          anchor: const Offset(0.5, 0.5),
+                          flat: true,
+                          zIndex: 6,
+                        ),
                     },
                     myLocationEnabled: false,
                     zoomControlsEnabled: false,
                     gestureRecognizers: kMapGestureRecognizers,
+                    onMapCreated: (c) {
+                      _mapController = c;
+                      // Trail points may already be loaded by the time the
+                      // GoogleMap is ready; fit now so the whole route is
+                      // framed inside the 240 px header instead of being
+                      // shown at the initial fixed zoom-14.
+                      WidgetsBinding.instance
+                          .addPostFrameCallback((_) => _fitRouteBounds());
+                    },
                   )
                 : Container(
                     color: AppColors.background,

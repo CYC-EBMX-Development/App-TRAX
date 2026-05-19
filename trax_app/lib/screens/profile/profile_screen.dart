@@ -15,6 +15,7 @@ import '../../routers/trax_router.dart';
 import '../../theme/app_theme.dart';
 import '../garage/garage_screen.dart';
 import '../session/session_screen.dart';
+import 'change_password_screen.dart';
 import 'edit_profile_screen.dart';
 import 'package:trax_app/common/widgets/page_code_badge.dart';
 
@@ -37,13 +38,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
     super.initState();
     _loadAll();
     _checkForUpdate();
-    // Opening the Profile counts as "user has seen the update".
-    AppUpdateService.instance.markUpdateSeen();
   }
 
   Future<void> _checkForUpdate() async {
     final s = await AppUpdateService.instance.checkForUpdate();
     if (mounted) setState(() => _updateStatus = s);
+    // Opening the Profile counts as "user has seen the update" — persist
+    // this so the home avatar badge stays off until a *newer* release
+    // appears. Done after the check completes so the service knows which
+    // release code to remember.
+    await AppUpdateService.instance.markUpdateSeen();
   }
 
   String _versionTileSubtitle() {
@@ -293,6 +297,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (mounted) setState(() {}); // GlobalUserInfo updated; rebuild header
   }
 
+  Future<void> _openChangePassword() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const ChangePasswordScreen()),
+    );
+  }
+
   Future<void> _openGarage() async {
     await Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const GarageScreen()),
@@ -402,6 +412,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
               _buildSection('Settings', [
                 _MenuItem(Icons.person_outline, 'Edit Profile', '',
                     onTap: _openEditProfile),
+                _MenuItem(Icons.lock_outline, 'Change Password', '',
+                    onTap: _openChangePassword),
                 _MenuItem(Icons.gps_fixed, 'GPS Sampling',
                     GpsIntervalSettings.labelFor(
                         GpsIntervalSettings.baseIntervalMs),

@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:install_plugin/install_plugin.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// One snapshot of `version.json` published on the OTA server.
 ///
@@ -59,8 +60,10 @@ class AppReleaseInfo {
 
 /// Result of [AppUpdateService.checkForUpdate].
 class AppUpdateStatus {
-  final String currentVersion; // "1.0.0"
-  final int currentBuildNumber; // 26051301 (parsed from PackageInfo.buildNumber)
+  final String currentVersion; // "1.0.0" or "260518.05"
+  /// Canonical YYMMDDNN integer for comparison. 0 means "could not parse"
+  /// (e.g. legacy builds that shipped with an epoch-second buildNumber).
+  final int currentBuildNumber;
   final AppReleaseInfo? release;
 
   const AppUpdateStatus({
@@ -71,11 +74,18 @@ class AppUpdateStatus {
 
   bool get hasUpdate {
     final r = release?.buildNumber;
-    if (r == null) return false;
+    if (r == null || r <= 0) return false;
+    // currentBuildNumber == 0 means the installed APK predates the
+    // YYMMDDNN convention (legacy epoch buildNumber). Treat as "always
+    // older than any well-formed release" so the user can move forward
+    // to a sane version code.
+    if (currentBuildNumber <= 0) return true;
     return r > currentBuildNumber;
   }
 
-  /// Pretty current version, e.g. `1.0.0 (260513-01)`.
+  /// Pretty current version, e.g. `1.0.0 (260518-05)`.
+  /// Falls back to just the raw version when the build number could not
+  /// be normalised into the canonical form.
   String get displayCurrent {
     final code = _formatCode(currentBuildNumber);
     return code.isEmpty
@@ -84,9 +94,11 @@ class AppUpdateStatus {
   }
 
   static String _formatCode(int n) {
-    if (n <= 0) return '';
+    // Canonical form is exactly 8 digits: YYMMDDNN. Refuse to render
+    // anything else so legacy 10-digit epochs no longer surface as
+    // bogus "177908-0181" strings.
+    if (n < 20000000 || n > 99999999) return '';
     final s = n.toString();
-    if (s.length < 8) return s;
     final date = s.substring(0, 6);
     final ctr = s.substring(6);
     return '$date-$ctr';
@@ -104,15 +116,44 @@ class AppUpdateService {
   static final AppUpdateService instance = AppUpdateService._();
 
   /// Reactive flag indicating whether the most recent [checkForUpdate]
-  /// found a newer build than the one installed. UI surfaces (e.g. the
-  /// home-screen avatar badge) listen to this so they can show an
-  /// unobtrusive "new update" hint without re-checking themselves.
+  /// found a newer build than the one installed *and* the user has not
+  /// yet acknowledged that specific build via [markUpdateSeen]. UI
+  /// surfaces (e.g. the home-screen avatar badge) listen to this so they
+  /// can show an unobtrusive "new update" hint without re-checking
+  /// themselves.
   ///
-  /// Cleared via [markUpdateSeen] when the user opens the Profile page
-  /// where the full update tile lives.
+  /// After [markUpdateSeen] the flag stays false across subsequent
+  /// [checkForUpdate] calls until the OTA server publishes a *newer*
+  /// release code than the one the user already saw.
   final ValueNotifier<bool> hasUpdateAvailable = ValueNotifier<bool>(false);
 
-  void markUpdateSeen() {
+  /// SharedPreferences key for the build code the user has already
+  /// acknowledged (by opening the Profile / update panel). Persists
+  /// across launches so we don't nag with a red dot until a newer
+  /// version ships.
+  static const String _prefsKeySeenCode = 'ota_seen_code_v1';
+
+  AppReleaseInfo? _lastKnownRelease;
+  String? _seenCodeCache;
+
+  Future<String> _loadSeenCode() async {
+    if (_seenCodeCache != null) return _seenCodeCache!;
+    final prefs = await SharedPreferences.getInstance();
+    _seenCodeCache = prefs.getString(_prefsKeySeenCode) ?? '';
+    return _seenCodeCache!;
+  }
+
+  /// Persist that the user has acknowledged the most recently observed
+  /// release (if any) and clear the badge. The next [checkForUpdate]
+  /// will keep the badge off until the server publishes a release whose
+  /// `latestCode` differs from the one we just persisted.
+  Future<void> markUpdateSeen() async {
+    final code = _lastKnownRelease?.latestCode;
+    if (code != null && code.isNotEmpty) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_prefsKeySeenCode, code);
+      _seenCodeCache = code;
+    }
     if (hasUpdateAvailable.value) hasUpdateAvailable.value = false;
   }
 
@@ -149,17 +190,31 @@ class AppUpdateService {
     return int.tryParse('$date$seq') ?? 0;
   }
 
+  /// Normalise the platform-reported `version`/`buildNumber` pair into a
+  /// canonical `YYMMDDNN` integer.
+  ///
+  /// Resolution order:
+  /// 1. If `buildNumber` is already in the canonical 8-digit YYMMDDNN
+  ///    range, prefer it (this is what `build_apk.sh`/`build_ipa.sh`
+  ///    now emit on both platforms).
+  /// 2. Otherwise try parsing `version` (e.g. `260518.05` or `260518.05.0`).
+  /// 3. Otherwise return 0 — meaning "legacy/unknown build, treat as
+  ///    older than any well-formed release".
+  ///
+  /// Legacy Android builds shipped with `--build-number=$(date +%s)`,
+  /// producing a 10-digit epoch (~1.78e9) that previously got displayed
+  /// as garbage like `177908-0181` and broke version comparison.
+  static int _normalizeBuild(String version, String buildNumber) {
+    final raw = int.tryParse(buildNumber) ?? 0;
+    if (raw >= 20000000 && raw <= 99999999) return raw;
+    final fromVersion = _parseCode(version);
+    if (fromVersion > 0) return fromVersion;
+    return 0;
+  }
+
   Future<AppUpdateStatus> checkForUpdate() async {
     final pkg = await PackageInfo.fromPlatform();
-    // Android: buildNumber is already YYMMDDNN (e.g. 26051317).
-    // iOS:     buildNumber is an epoch second for ASC monotonicity, so
-    //          fall back to parsing the version string (CFBundleShort
-    //          VersionString) which is `YYMMDD.NN[.0]`.
-    int currentBuild = int.tryParse(pkg.buildNumber) ?? 0;
-    if (Platform.isIOS || currentBuild < 20000000) {
-      final fromVersion = _parseCode(pkg.version);
-      if (fromVersion > 0) currentBuild = fromVersion;
-    }
+    final currentBuild = _normalizeBuild(pkg.version, pkg.buildNumber);
     AppReleaseInfo? release;
     try {
       final resp = await _dio.get<Map<String, dynamic>>(
@@ -177,7 +232,17 @@ class AppUpdateService {
       currentBuildNumber: currentBuild,
       release: release,
     );
-    hasUpdateAvailable.value = status.hasUpdate;
+    _lastKnownRelease = release;
+    final seen = await _loadSeenCode();
+    // Only flag the badge when the server has a newer build than
+    // installed *and* the user hasn't already acknowledged this exact
+    // release code. Acknowledgement persists across launches via
+    // [_prefsKeySeenCode].
+    final shouldBadge = status.hasUpdate &&
+        release != null &&
+        release.latestCode.isNotEmpty &&
+        release.latestCode != seen;
+    hasUpdateAvailable.value = shouldBadge;
     return status;
   }
 

@@ -1,7 +1,11 @@
+import 'dart:async';
+
+import 'package:amap_flutter_base/amap_flutter_base.dart' as amap;
 import 'package:amap_flutter_map/amap_flutter_map.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/widgets.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart' show LatLng;
 import 'package:intl/intl.dart';
 
@@ -9,6 +13,8 @@ import '../../../common/global/global_user_info.dart';
 import '../../../common/network/trax_api.dart';
 import '../../../common/services/map_service.dart';
 import '../../../common/utils/amap_adapter.dart';
+import '../../../common/utils/chaser_dot_icon.dart';
+import '../../../common/utils/polyline_chaser.dart';
 import '../../../common/utils/trax_storage_util.dart';
 import '../../../common/widgets/trax_dialog.dart';
 import '../../../models/ebike.dart';
@@ -49,6 +55,15 @@ class _TrailDetailPageAmapState extends State<TrailDetailPageAmap> {
   late bool _isPublic;
   bool _changed = false;
 
+  AMapController? _mapController;
+
+  // Direction-of-travel hint: a small blue dot slides along the route
+  // on a repeating timer.
+  PolylineChaser? _chaser;
+  BitmapDescriptor? _chaserDot;
+  Timer? _chaserTimer;
+  double _chaserPhase = 0;
+
   Trail get trail => widget.trail;
   bool get _isOwner => trail.creatorId == GlobalUserInfo.instance.id.value;
 
@@ -57,7 +72,61 @@ class _TrailDetailPageAmapState extends State<TrailDetailPageAmap> {
     super.initState();
     _isPublic = trail.isPublic;
     _locationName = trail.location;
+    _loadChaserDot();
     _loadPoints();
+  }
+
+  @override
+  void dispose() {
+    _chaserTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadChaserDot() async {
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    final dpr = views.isNotEmpty ? views.first.devicePixelRatio : 3.0;
+    final bytes = await ChaserDotIcon.bytes(dpr);
+    if (!mounted) return;
+    setState(() => _chaserDot = BitmapDescriptor.fromBytes(bytes));
+  }
+
+  void _startChaser() {
+    _chaserTimer?.cancel();
+    if (_route.length < 3) return;
+    _chaser = PolylineChaser(_route);
+    _chaserTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
+      if (!mounted) return;
+      setState(() => _chaserPhase = (_chaserPhase + 0.00222) % 1.0);
+    });
+  }
+
+  /// Frame the whole route in the 240 px-tall map header so a long
+  /// trail isn't shown as a tiny squiggle next to the centre pin.
+  void _fitRouteBounds() {
+    final ctrl = _mapController;
+    if (ctrl == null || _route.isEmpty) return;
+    final amapPts = AmapAdapter.toAmapList(_route);
+    if (amapPts.length == 1) {
+      ctrl.moveCamera(CameraUpdate.newLatLngZoom(amapPts.first, 16));
+      return;
+    }
+    double minLat = amapPts.first.latitude, maxLat = amapPts.first.latitude;
+    double minLng = amapPts.first.longitude, maxLng = amapPts.first.longitude;
+    for (final p in amapPts) {
+      if (p.latitude < minLat) minLat = p.latitude;
+      if (p.latitude > maxLat) maxLat = p.latitude;
+      if (p.longitude < minLng) minLng = p.longitude;
+      if (p.longitude > maxLng) maxLng = p.longitude;
+    }
+    ctrl.moveCamera(
+      CameraUpdate.newLatLngBounds(
+        amap.LatLngBounds(
+          southwest: amap.LatLng(minLat, minLng),
+          northeast: amap.LatLng(maxLat, maxLng),
+        ),
+        40,
+      ),
+    );
   }
 
   Future<void> _loadPoints() async {
@@ -82,6 +151,8 @@ class _TrailDetailPageAmapState extends State<TrailDetailPageAmap> {
       _route = route;
       _isLoading = false;
     });
+    _startChaser();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _fitRouteBounds());
     if (_locationName == null || _locationName!.isEmpty) {
       _fetchLocationName();
     }
@@ -252,8 +323,20 @@ class _TrailDetailPageAmapState extends State<TrailDetailPageAmap> {
       privacyStatement: AmapAdapter.privacy(),
       apiKey: AmapAdapter.apiKey(),
       initialCameraPosition: AmapAdapter.initialCamera(_route, zoom: 14),
-      polylines: {AmapAdapter.routePolyline(_route)},
-      markers: AmapAdapter.startFinishMarkers(_route),
+      polylines: {
+        AmapAdapter.routePolyline(_route,
+            width: 2, color: AppColors.primary.withValues(alpha: 0.9)),
+      },
+      markers: {
+        ...AmapAdapter.startFinishMarkers(_route),
+        if (_chaserDot != null && (_chaser?.canRender ?? false))
+          Marker(
+            position: AmapAdapter.toAmap(_chaser!.headAt(_chaserPhase)),
+            icon: _chaserDot!,
+            anchor: const Offset(0.5, 0.5),
+            zIndex: 6,
+          ),
+      },
       scrollGesturesEnabled: true,
       zoomGesturesEnabled: true,
       rotateGesturesEnabled: false,
@@ -264,6 +347,11 @@ class _TrailDetailPageAmapState extends State<TrailDetailPageAmap> {
       // pinch to the map's native view.
       gestureRecognizers: <Factory<OneSequenceGestureRecognizer>>{
         Factory<EagerGestureRecognizer>(() => EagerGestureRecognizer()),
+      },
+      onMapCreated: (c) {
+        _mapController = c;
+        WidgetsBinding.instance
+            .addPostFrameCallback((_) => _fitRouteBounds());
       },
     );
   }

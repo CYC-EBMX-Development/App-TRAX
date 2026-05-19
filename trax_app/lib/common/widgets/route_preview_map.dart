@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:amap_flutter_base/amap_flutter_base.dart' as amap;
 import 'package:amap_flutter_map/amap_flutter_map.dart' as amap_map;
 import 'package:flutter/foundation.dart';
@@ -7,8 +9,10 @@ import 'package:google_maps_flutter/google_maps_flutter.dart' as gmap;
 
 import '../services/map_provider.dart';
 import '../utils/amap_adapter.dart';
+import '../utils/chaser_dot_icon.dart';
 import '../utils/map_gesture_recognizers.dart';
 import '../utils/map_region.dart';
+import '../utils/polyline_chaser.dart';
 import '../utils/start_end_marker_icons.dart';
 import '../utils/start_end_marker_icons_amap.dart';
 import '../../theme/app_theme.dart';
@@ -31,6 +35,11 @@ class RoutePreviewMap extends StatefulWidget {
   final double padding;
   final MapProvider? providerOverride;
 
+  /// When true, overlay a small blue dot that slides along the route on
+  /// a repeating ~22.5 s loop. Mirrors the trail-detail header so users
+  /// can see the trail's travel direction at a glance.
+  final bool showChaser;
+
   const RoutePreviewMap({
     super.key,
     required this.route,
@@ -40,6 +49,7 @@ class RoutePreviewMap extends StatefulWidget {
     this.myLocationEnabled = false,
     this.padding = 50,
     this.providerOverride,
+    this.showChaser = true,
   });
 
   @override
@@ -50,6 +60,14 @@ class _RoutePreviewMapState extends State<RoutePreviewMap> {
   gmap.GoogleMapController? _gController;
   amap_map.AMapController? _aController;
 
+  // Chaser animation state. Built once the route is non-empty and the
+  // chaser bitmap (provider-specific) has finished loading.
+  PolylineChaser? _chaser;
+  gmap.BitmapDescriptor? _chaserGIcon;
+  amap_map.BitmapDescriptor? _chaserAIcon;
+  Timer? _chaserTimer;
+  double _chaserPhase = 0;
+
   MapProvider get _provider {
     if (widget.providerOverride != null) return widget.providerOverride!;
     if (widget.route.isNotEmpty) {
@@ -59,10 +77,50 @@ class _RoutePreviewMapState extends State<RoutePreviewMap> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    if (widget.showChaser) {
+      _loadChaserIcon();
+      _startChaser();
+    }
+  }
+
+  @override
+  void dispose() {
+    _chaserTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadChaserIcon() async {
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    final dpr = views.isNotEmpty ? views.first.devicePixelRatio : 3.0;
+    if (_provider == MapProvider.amap) {
+      final bytes = await ChaserDotIcon.bytes(dpr);
+      if (!mounted) return;
+      setState(() => _chaserAIcon = amap_map.BitmapDescriptor.fromBytes(bytes));
+    } else {
+      final icon = await ChaserDotIcon.bitmap(dpr);
+      if (!mounted) return;
+      setState(() => _chaserGIcon = icon);
+    }
+  }
+
+  void _startChaser() {
+    _chaserTimer?.cancel();
+    if (widget.route.length < 3) return;
+    _chaser = PolylineChaser(widget.route);
+    _chaserTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
+      if (!mounted) return;
+      setState(() => _chaserPhase = (_chaserPhase + 0.00222) % 1.0);
+    });
+  }
+
+  @override
   void didUpdateWidget(covariant RoutePreviewMap old) {
     super.didUpdateWidget(old);
     if (old.route != widget.route) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _fitBounds());
+      if (widget.showChaser) _startChaser();
     }
   }
 
@@ -150,6 +208,18 @@ class _RoutePreviewMapState extends State<RoutePreviewMap> {
         anchor: const Offset(0.5, 0.5),
       ));
     }
+    if (widget.showChaser &&
+        _chaserGIcon != null &&
+        (_chaser?.canRender ?? false)) {
+      markers.add(gmap.Marker(
+        markerId: const gmap.MarkerId('chaser'),
+        position: _chaser!.headAt(_chaserPhase),
+        icon: _chaserGIcon!,
+        anchor: const Offset(0.5, 0.5),
+        flat: true,
+        zIndex: 6,
+      ));
+    }
     return gmap.GoogleMap(
       initialCameraPosition: gmap.CameraPosition(
         target: pts[pts.length ~/ 2],
@@ -161,7 +231,7 @@ class _RoutePreviewMapState extends State<RoutePreviewMap> {
             polylineId: const gmap.PolylineId('route'),
             points: pts,
             color: AppColors.primary,
-            width: 4,
+            width: 2,
           ),
       },
       markers: markers,
@@ -194,6 +264,16 @@ class _RoutePreviewMapState extends State<RoutePreviewMap> {
         position: AmapAdapter.toAmap(pts.last),
         icon: StartEndMarkerIconsAmap.finish,
         anchor: const Offset(0.5, 0.5),
+      ));
+    }
+    if (widget.showChaser &&
+        _chaserAIcon != null &&
+        (_chaser?.canRender ?? false)) {
+      markers.add(amap_map.Marker(
+        position: AmapAdapter.toAmap(_chaser!.headAt(_chaserPhase)),
+        icon: _chaserAIcon!,
+        anchor: const Offset(0.5, 0.5),
+        zIndex: 6,
       ));
     }
     return amap_map.AMapWidget(

@@ -1,8 +1,10 @@
 package com.trax.controller;
 
 import com.trax.dto.ApiResponse;
+import com.trax.dto.ChangePasswordRequest;
 import com.trax.dto.UpdateProfileRequest;
 import com.trax.model.User;
+import com.trax.service.AuthService;
 import com.trax.service.UserService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
@@ -31,13 +33,17 @@ public class UserController {
     private static final long MAX_AVATAR_BYTES = 5L * 1024 * 1024; // 5 MB
 
     private final UserService userService;
+    private final AuthService authService;
 
     @Value("${app.images.dir:/Users/cyc_joshua/Documents/CYC/TRAX/App-TRAX/backend/images}")
     private String imagesDir;
 
-    public UserController(UserService userService) {
+    public UserController(UserService userService, AuthService authService) {
         this.userService = userService;
+        this.authService = authService;
     }
+
+
 
     @GetMapping("/me")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getCurrentUser(Authentication auth) {
@@ -54,6 +60,23 @@ public class UserController {
         if (req.getAvatarUrl() != null) patch.setAvatarUrl(req.getAvatarUrl());
         User saved = userService.updateUser(principal.getId(), patch);
         return ResponseEntity.ok(ApiResponse.success(toDto(saved)));
+    }
+
+    @PutMapping("/me/password")
+    public ResponseEntity<ApiResponse<Void>> changePassword(
+            Authentication auth, @RequestBody ChangePasswordRequest req) {
+        User principal = (User) auth.getPrincipal();
+        authService.changePassword(principal.getId(), req.getOldPassword(), req.getNewPassword());
+        return ResponseEntity.ok(ApiResponse.success("Password changed", null));
+    }
+
+    @PostMapping("/me/verify-password")
+    public ResponseEntity<ApiResponse<Void>> verifyPassword(
+            Authentication auth, @RequestBody ChangePasswordRequest req) {
+        User principal = (User) auth.getPrincipal();
+        // Reuses ChangePasswordRequest — only oldPassword is read.
+        authService.verifyPassword(principal.getId(), req.getOldPassword());
+        return ResponseEntity.ok(ApiResponse.success("Password verified", null));
     }
 
     @PostMapping("/me/avatar")

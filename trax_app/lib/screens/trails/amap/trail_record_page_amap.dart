@@ -743,7 +743,7 @@ class _TrailRecordPageAmapState extends State<TrailRecordPageAmap> {
                         Polyline(
                           points: AmapAdapter.toAmapList(_route),
                           color: AppColors.primary,
-                          width: 8,
+                          width: 4,
                         ),
                       // Each picked-leg in solid primary; closing leg in
                       // a slightly different shade so the rider can tell
@@ -752,13 +752,13 @@ class _TrailRecordPageAmapState extends State<TrailRecordPageAmap> {
                         ..._legSegments.map((leg) => Polyline(
                               points: AmapAdapter.toAmapList(leg),
                               color: AppColors.primary,
-                              width: 6,
+                              width: 3,
                             )),
                       if (_isPickingLapPoints && _closingLeg != null)
                         Polyline(
                           points: AmapAdapter.toAmapList(_closingLeg!),
                           color: AppColors.primary.withValues(alpha: 0.65),
-                          width: 6,
+                          width: 3,
                         ),
                     },
                     markers: {

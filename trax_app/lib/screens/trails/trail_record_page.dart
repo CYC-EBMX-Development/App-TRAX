@@ -1033,28 +1033,28 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
                   polylineId: const PolylineId('trail'),
                   points: _route,
                   color: AppColors.primary,
-                  width: 4,
+                  width: 2,
                 ),
               if (_isDrawingLap && _drawnLapPoints.length >= 2)
                 Polyline(
                   polylineId: const PolylineId('drawn_lap'),
                   points: _drawnLapPoints,
                   color: AppColors.primary,
-                  width: 4,
+                  width: 2,
                 ),
               if (_isPickingLapPoints)
                 ..._legSegments.asMap().entries.map((e) => Polyline(
                       polylineId: PolylineId('leg_${e.key}'),
                       points: e.value,
                       color: AppColors.primary,
-                      width: 5,
+                      width: 3,
                     )),
               if (_isPickingLapPoints && _closingLeg != null)
                 Polyline(
                   polylineId: const PolylineId('closing_leg'),
                   points: _closingLeg!,
                   color: AppColors.primary.withValues(alpha: 0.65),
-                  width: 5,
+                  width: 3,
                 ),
             },
             markers: {
