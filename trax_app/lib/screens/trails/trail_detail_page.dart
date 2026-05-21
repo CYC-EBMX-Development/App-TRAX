@@ -5,11 +5,13 @@ import 'package:flutter/widgets.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../../common/services/map_service.dart';
 import '../../common/utils/chaser_dot_icon.dart';
+import '../../common/utils/cp_marker_icons.dart';
 import '../../common/utils/polyline_chaser.dart';
 import '../../common/utils/start_end_marker_icons.dart';
 import 'package:intl/intl.dart';
 import '../../models/trail.dart';
 import '../../models/ebike.dart';
+import '../../models/user_checkpoint.dart';
 import '../../common/network/trax_api.dart';
 import '../../common/global/global_user_info.dart';
 import '../../common/utils/trax_storage_util.dart';
@@ -33,6 +35,9 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
   String? _locationName;
   late bool _isPublic;
   bool _changed = false;
+
+  /// Per-user checkpoints loaded from the backend for this trail (max 4).
+  List<UserCheckpoint> _checkpoints = const [];
 
   GoogleMapController? _mapController;
 
@@ -137,10 +142,28 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
     });
     _startChaser();
     WidgetsBinding.instance.addPostFrameCallback((_) => _fitRouteBounds());
+    _loadCheckpoints();
 
     // Only geocode if location not already stored in DB
     if (_locationName == null || _locationName!.isEmpty) {
       _fetchLocationName();
+    }
+  }
+
+  /// Load this user's checkpoints for the current trail. Failures are
+  /// swallowed silently — checkpoints are an optional overlay, so a
+  /// network blip should not block the rest of the detail page.
+  Future<void> _loadCheckpoints() async {
+    final id = int.tryParse(trail.id ?? '');
+    if (id == null) return;
+    final resp = await TraxApi.getTrailCheckpoints(id);
+    if (!mounted) return;
+    if (resp.isSuccess() && resp.data is List) {
+      final cps = (resp.data as List)
+          .map((e) => UserCheckpoint.fromJson(e as Map<String, dynamic>))
+          .toList()
+        ..sort((a, b) => a.sequenceIndex.compareTo(b.sequenceIndex));
+      setState(() => _checkpoints = cps);
     }
   }
 
@@ -280,7 +303,7 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
                         polylineId: const PolylineId('trail'),
                         points: _route,
                         color: AppColors.primary.withValues(alpha: 0.9),
-                        width: 2,
+                        width: 4,
                       ),
                     },
                     markers: {
@@ -295,6 +318,15 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
                           position: _route.last,
                           icon: StartEndMarkerIcons.finish,
                         ),
+                      // Per-user checkpoint pins (numbered orange circles).
+                      ...CpMarkerIcons.buildMarkers(
+                        context,
+                        {
+                          for (final cp in _checkpoints)
+                            cp.sequenceIndex: LatLng(cp.latitude, cp.longitude),
+                        },
+                        onWarmed: () { if (mounted) setState(() {}); },
+                      ),
                       if (_chaserDot != null && (_chaser?.canRender ?? false))
                         Marker(
                           markerId: const MarkerId('trail_chaser'),
@@ -343,6 +375,8 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
                     const SizedBox(height: 16),
                     _buildStartLapTimerButton(),
                   ],
+                  const SizedBox(height: 16),
+                  _buildCheckpointsCard(),
                   const SizedBox(height: 16),
                   _buildStatsGrid(),
                   SizedBox(height: MediaQuery.of(context).padding.bottom + 16),
@@ -497,6 +531,78 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
                 ),
               ],
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// "My Checkpoints" card. Shows how many CPs the user has placed on
+  /// this trail (0–4) and a Configure button that opens the shared
+  /// TrailCheckpointsPage via [MapRouter]. On return we reload the
+  /// checkpoints so the map markers and the count refresh.
+  Widget _buildCheckpointsCard() {
+    final id = int.tryParse(trail.id ?? '');
+    if (id == null) return const SizedBox.shrink();
+    final count = _checkpoints.length;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 8,
+              offset: const Offset(0, 2)),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: AppColors.warning.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(Icons.flag, color: AppColors.warning, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('My Checkpoints',
+                    style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textPrimary)),
+                const SizedBox(height: 2),
+                Text('$count / 4 placed along this trail',
+                    style: const TextStyle(
+                        fontSize: 11, color: AppColors.textSecondary)),
+              ],
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              await MapRouter.openTrailCheckpoints(
+                context,
+                trailId: id,
+                trailName: trail.name,
+                trailStartLat: trail.startLatitude,
+                trailStartLng: trail.startLongitude,
+              );
+              if (!mounted) return;
+              await _loadCheckpoints();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            ),
+            child: Text(count == 0 ? 'Configure' : 'Edit'),
           ),
         ],
       ),

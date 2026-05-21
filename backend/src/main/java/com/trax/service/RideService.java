@@ -30,7 +30,7 @@ public class RideService {
 
     // Lap detection thresholds
     private static final double OVERLAP_THRESHOLD_KM = 0.03; // 30m to count as "on trail"
-    private static final double LAP_MIN_EXCURSION_KM = 0.05;     // 150m away before lap can close
+    private static final double LAP_MIN_EXCURSION_KM = 0.05;     // 50m away before lap can close
     private static final long LAP_MIN_DURATION_SEC = 15;         // ignore noisy lap closures < 15s
     /** Radius (km) around a checkpoint within which a ride point counts as
      *  passing through that checkpoint. */
@@ -39,10 +39,25 @@ public class RideService {
      *  centred on the trail start point and perpendicular to the trail's
      *  initial heading; a lap closes when the rider's GPS segment crosses
      *  this line in the trail's forward direction. */
-    private static final double LAP_FINISH_LINE_HALF_WIDTH_KM = 0.015; // ±15 m
+    private static final double LAP_FINISH_LINE_HALF_WIDTH_KM = 0.020; // ±20 m
     /** Minimum distance (m) between the start point and the trail point
-     *  used to derive the trail's initial heading. */
-    private static final double HEADING_REF_MIN_METERS = 5.0;
+     *  used to derive the trail's initial heading. Larger values average
+     *  out GPS noise in the first few recorded trail points (Record mode)
+     *  while still picking up the user's 2nd pick-point in Pick Point mode. */
+    private static final double HEADING_REF_MIN_METERS = 20.0;
+    /** Approach-direction filter: how many recent ride points to look back
+     *  over when judging whether the rider is approaching the finish line
+     *  along the trail's forward direction (not just randomly crossing it
+     *  while moving around in the pit area). */
+    private static final int APPROACH_LOOKBACK_POINTS = 5;
+    /** Approach-direction filter: minimum net displacement (m) over the
+     *  lookback window. If the rider is essentially hovering, refuse to
+     *  close a lap regardless of crossing geometry. */
+    private static final double APPROACH_MIN_DISPLACEMENT_M = 10.0;
+    /** Approach-direction filter: minimum cosine between the rider's recent
+     *  net displacement vector and the trail's heading vector. 0.5 ≈ 60°
+     *  cone around the forward direction. */
+    private static final double APPROACH_COS_THRESHOLD = 0.5;
 
     public RideService(RideRecordRepository rideRecordRepository,
                        RidePointRepository ridePointRepository,
@@ -256,6 +271,19 @@ public class RideService {
 
     public List<RideLapDto> getLaps(Long rideId, Long userId) {
         RideRecord ride = getOwnedRide(rideId, userId);
+
+        // Re-run lap detection on demand. The algorithm is idempotent
+        // (it only emits laps after the last persisted one) so this is
+        // safe to invoke on every read. It also allows historical rides
+        // to benefit when the detection algorithm is upgraded.
+        if (ride.getTrail() != null && ride.getTargetLaps() != null) {
+            List<RidePoint> points = ridePointRepository
+                    .findByRideIdOrderByTimestampAsc(rideId);
+            if (!points.isEmpty()) {
+                detectAndPersistLaps(ride, points);
+            }
+        }
+
         List<RideLap> laps = rideLapRepository.findByRideIdOrderByLapNumberAsc(rideId);
 
         // Calculate/recalculate overlapPercent for all laps with a trail
@@ -382,12 +410,19 @@ public class RideService {
      *     line. Direction filter: the rider's velocity vector must have a
      *     positive component along the trail heading (forward crossings
      *     only) so going backward across the line never counts.
-     *  3. The exact crossing timestamp is interpolated linearly between
+     *  3. Approach-direction filter: even when a forward crossing is
+     *     detected geometrically, only accept it if the rider's net
+     *     displacement over the last {@link #APPROACH_LOOKBACK_POINTS}
+     *     samples is at least {@link #APPROACH_MIN_DISPLACEMENT_M} m AND
+     *     its direction is within ±60° of the trail heading. This
+     *     suppresses false positives from the rider milling around in a
+     *     pit/parking area near the finish line.
+     *  4. The exact crossing timestamp is interpolated linearly between
      *     prev.ts and curr.ts using the intersection parameter t.
-     *  4. First forward crossing arms the gate — lap 1 starts at that
-     *     timestamp (no standing-at-start padding). Subsequent forward
+     *  5. First accepted crossing arms the gate — lap 1 starts at that
+     *     timestamp (no standing-at-start padding). Subsequent accepted
      *     crossings close the in-progress lap.
-     *  5. Anti-jitter: a lap is only closed when the rider has travelled
+     *  6. Anti-jitter: a lap is only closed when the rider has travelled
      *     at least {@link #LAP_MIN_EXCURSION_KM} from the start AND the
      *     in-progress lap is at least {@link #LAP_MIN_DURATION_SEC} long.
      *
@@ -398,7 +433,10 @@ public class RideService {
         Trail trail = ride.getTrail();
         if (trail == null || trail.getStartLatitude() == null || trail.getStartLongitude() == null) return;
         if (points.isEmpty()) return;
-        if ("completed".equals(ride.getStatus())) return;
+        // NOTE: previously skipped completed rides here. Removed so that the
+        // algorithm can backfill laps for historical rides (idempotent: only
+        // processes points after the last persisted lap; auto-complete guard
+        // below already checks status to avoid re-triggering finish logic).
 
         int existingLapCount = (ride.getCompletedLaps() != null) ? ride.getCompletedLaps() : 0;
         int targetLaps = ride.getTargetLaps() != null ? ride.getTargetLaps() : 0;
@@ -453,6 +491,10 @@ public class RideService {
         // entities after the laps are persisted (need lap.id).
         List<List<Object[]>> newLapPasses = new ArrayList<>();
         List<RidePoint> currentLapPoints = new ArrayList<>();
+        // Rolling buffer of the rider's most recent points (regardless of gate
+        // state) used by the approach-direction filter.
+        java.util.ArrayDeque<RidePoint> recent =
+                new java.util.ArrayDeque<>(APPROACH_LOOKBACK_POINTS + 1);
 
         // Pre-load this rider's checkpoints for this trail (personal-only).
         Long userId = (ride.getUser() != null) ? ride.getUser().getId() : null;
@@ -472,6 +514,10 @@ public class RideService {
                             Math.toRadians(p.getLongitude() - startLng) * R * cosLat0,
                             Math.toRadians(p.getLatitude() - startLat) * R
                     };
+                    // Keep the approach-direction window primed so that the
+                    // first crossing after resume has enough history.
+                    recent.addLast(p);
+                    while (recent.size() > APPROACH_LOOKBACK_POINTS) recent.removeFirst();
                 }
                 continue;
             }
@@ -497,17 +543,19 @@ public class RideService {
             // Test whether the segment (prev → curr) crosses the finish
             // line in the trail's forward direction.
             if (prev != null && prevLocal != null && prev.getTimestamp() != null) {
-                Double t = segmentIntersectionParam(
+                Double tParam = segmentIntersectionParam(
                         prevLocal[0], prevLocal[1], curX, curY,
                         aX, aY, bX, bY);
-                if (t != null) {
+                if (tParam != null) {
                     double dx = curX - prevLocal[0];
                     double dy = curY - prevLocal[1];
                     boolean forward = (dx * hX + dy * hY) > 0;
-                    if (forward) {
+                    boolean approachOk = forward && isApproachAligned(
+                            recent, p, startLat, startLng, cosLat0, R, hX, hY);
+                    if (forward && approachOk) {
                         long segMs = Duration.between(prev.getTimestamp(), p.getTimestamp()).toMillis();
                         LocalDateTime crossingTs = prev.getTimestamp()
-                                .plus(Duration.ofMillis((long) (segMs * t)));
+                                .plus(Duration.ofMillis((long) (segMs * tParam)));
 
                         if (!gateArmed) {
                             // First-ever crossing: arm the gate. Lap 1 begins
@@ -552,6 +600,8 @@ public class RideService {
 
             prev = p;
             prevLocal = new double[]{curX, curY};
+            recent.addLast(p);
+            while (recent.size() > APPROACH_LOOKBACK_POINTS) recent.removeFirst();
         }
 
         if (!newLaps.isEmpty()) {
@@ -572,6 +622,29 @@ public class RideService {
             }
             rideRecordRepository.save(ride);
         }
+    }
+
+    /**
+     * Approach-direction filter. Returns true when the rider's net
+     * displacement across the recent window (ending at {@code current}) is
+     * long enough AND directionally aligned with the trail's forward
+     * heading. Returns true with too-short history so the very first few
+     * points don't all get rejected; callers still gate on {@code forward}.
+     */
+    private static boolean isApproachAligned(
+            java.util.Deque<RidePoint> recent, RidePoint current,
+            double startLat, double startLng,
+            double cosLat0, double R,
+            double hX, double hY) {
+        if (recent.size() < APPROACH_LOOKBACK_POINTS) return true;
+        RidePoint oldest = recent.peekFirst();
+        if (oldest == null) return true;
+        double dx = Math.toRadians(current.getLongitude() - oldest.getLongitude()) * R * cosLat0;
+        double dy = Math.toRadians(current.getLatitude() - oldest.getLatitude()) * R;
+        double mag = Math.hypot(dx, dy);
+        if (mag < APPROACH_MIN_DISPLACEMENT_M) return false;
+        double cos = (dx * hX + dy * hY) / mag; // (hX,hY) is already unit length
+        return cos >= APPROACH_COS_THRESHOLD;
     }
 
     /**

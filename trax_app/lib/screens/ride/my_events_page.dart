@@ -121,13 +121,7 @@ class _MyEventsPageState extends State<MyEventsPage> {
 
     return GestureDetector(
       onTap: () {
-        if (race.isPreparing && (race.isHost || race.isRider)) {
-          MapRouter.openRaceTracking(context, raceId: race.id);
-        } else {
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => RaceDetailPage(raceId: race.id)),
-          );
-        }
+        _openEventByStatus(race);
       },
       child: Container(
         margin: const EdgeInsets.only(bottom: 10),
@@ -188,5 +182,14 @@ class _MyEventsPageState extends State<MyEventsPage> {
         ),
       ),
     );
+  }
+
+  Future<void> _openEventByStatus(Race race) async {
+    await MapRouter.openEventByStatus(context, race);
+    if (!mounted) return;
+    _events.clear();
+    _page = 0;
+    _hasMore = true;
+    await _loadPage();
   }
 }

@@ -56,8 +56,11 @@ class AmapAdapter {
   }
 
   /// Build a polyline overlay from a WGS-84 route.
+  ///
+  /// Default width is `8` (doubled from the previous default of `4`) to
+  /// match the bumped trail-line styling used app-wide.
   static amap_map.Polyline routePolyline(List<gmap.LatLng> points,
-      {double width = 4, Color? color}) {
+      {double width = 8, Color? color}) {
     return amap_map.Polyline(
       points: toAmapList(points),
       color: color ?? AppColors.primary,

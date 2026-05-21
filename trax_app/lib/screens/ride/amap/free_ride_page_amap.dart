@@ -225,7 +225,8 @@ class _FreeRidePageAmapState extends State<FreeRidePageAmap> {
               zoom: 16,
             ),
             polylines: {
-              if (route.length >= 2) AmapAdapter.routePolyline(route),
+              if (route.length >= 2)
+                AmapAdapter.routePolyline(route, color: Colors.red),
             },
             markers: {
               if (rideStatus == 'idle' &&

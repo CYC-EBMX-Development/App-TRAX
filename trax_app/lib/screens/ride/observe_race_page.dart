@@ -57,7 +57,8 @@ class _ObserveRacePageState extends State<ObserveRacePage> {
     if (resp.isSuccess() && resp.data != null) {
       final race = Race.fromJson(resp.data as Map<String, dynamic>);
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => RaceDetailPage(raceId: race.id)),
+        // Unified event navigation
+        MapRouter.openEventByStatus(context, race),
       );
     } else {
       showTraxSnackBar(context, resp.message, isError: true);
@@ -69,7 +70,8 @@ class _ObserveRacePageState extends State<ObserveRacePage> {
     if (!mounted) return;
     if (resp.isSuccess()) {
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => RaceDetailPage(raceId: race.id)),
+        // Unified event navigation
+        MapRouter.openEventByStatus(context, race),
       );
     } else {
       showTraxSnackBar(context, resp.message, isError: true);
@@ -164,7 +166,8 @@ class _ObserveRacePageState extends State<ObserveRacePage> {
     return GestureDetector(
       onTap: () {
         Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => RaceDetailPage(raceId: race.id)),
+          // Unified event navigation
+          MapRouter.openEventByStatus(context, race),
         ).then((_) => _load());
       },
       child: Container(

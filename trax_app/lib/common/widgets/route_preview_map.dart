@@ -40,6 +40,10 @@ class RoutePreviewMap extends StatefulWidget {
   /// can see the trail's travel direction at a glance.
   final bool showChaser;
 
+  /// Optional override for the route polyline color. Defaults to
+  /// [AppColors.primary] (trail orange) when null.
+  final Color? routeColor;
+
   const RoutePreviewMap({
     super.key,
     required this.route,
@@ -50,6 +54,7 @@ class RoutePreviewMap extends StatefulWidget {
     this.padding = 50,
     this.providerOverride,
     this.showChaser = true,
+    this.routeColor,
   });
 
   @override
@@ -230,8 +235,8 @@ class _RoutePreviewMapState extends State<RoutePreviewMap> {
           gmap.Polyline(
             polylineId: const gmap.PolylineId('route'),
             points: pts,
-            color: AppColors.primary,
-            width: 2,
+            color: widget.routeColor ?? AppColors.primary,
+            width: 4,
           ),
       },
       markers: markers,
@@ -281,7 +286,8 @@ class _RoutePreviewMapState extends State<RoutePreviewMap> {
       apiKey: AmapAdapter.apiKey(),
       initialCameraPosition: AmapAdapter.initialCamera(pts, zoom: 14),
       polylines: {
-        if (pts.length >= 2) AmapAdapter.routePolyline(pts),
+        if (pts.length >= 2)
+          AmapAdapter.routePolyline(pts, color: widget.routeColor),
       },
       markers: markers,
       scrollGesturesEnabled: widget.gesturesEnabled,

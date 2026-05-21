@@ -62,9 +62,18 @@ class _RaceTrackingPageAmapState extends State<RaceTrackingPageAmap>
   int? _selectedBikeId;
 
   static const List<Color> _riderColors = [
-    Color(0xFF4285F4), Color(0xFFEA4335), Color(0xFF34A853),
-    Color(0xFFFBBC04), Color(0xFF9C27B0), Color(0xFFFF6D00),
-    Color(0xFF00BCD4), Color(0xFFE91E63),
+    // Curated multi-rider palette. Trail polyline uses AppColors.primary
+    // (orange #FFB800), so orange/yellow hues are intentionally excluded
+    // from this list per Req 3 (多人 tracking colors must not match
+    // the trail color).
+    Color(0xFF4285F4), // blue
+    Color(0xFFEA4335), // red
+    Color(0xFF34A853), // green
+    Color(0xFF9C27B0), // purple
+    Color(0xFF00BCD4), // cyan
+    Color(0xFFE91E63), // pink
+    Color(0xFF3F51B5), // indigo
+    Color(0xFF8BC34A), // light green
   ];
 
   @override
@@ -608,15 +617,18 @@ class _RaceTrackingPageAmapState extends State<RaceTrackingPageAmap>
       polylines.add(amap_map.Polyline(
         points: AmapAdapter.toAmapList(_trailRoute),
         color: AppColors.primary.withValues(alpha: 0.35),
-        width: 7,
+        width: 14,
       ));
     }
+    // Req 4: AMap Polyline has no zIndex; rely on Set insertion order so
+    // later riders are drawn on top of earlier ones, and the trail (added
+    // first) stays at the lowest visual layer.
     for (final r in riders) {
       if (r.route.length >= 2) {
         polylines.add(amap_map.Polyline(
           points: AmapAdapter.toAmapList(r.route),
           color: _colorFor(r.userId),
-          width: 6,
+          width: 8,
         ));
       }
     }

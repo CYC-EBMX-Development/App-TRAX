@@ -1,3 +1,13 @@
+  /// Unified event navigation by status: waiting -> detail, preparing/in_progress -> tracking
+  static Future<void> openEventByStatus(BuildContext context, Race race) async {
+    if (race.isPreparing || race.isInProgress) {
+      await openRaceTracking(context, raceId: race.id);
+    } else {
+      await Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => RaceDetailPage(raceId: race.id)),
+      );
+    }
+  }
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart' show LatLng;
 
@@ -197,8 +207,11 @@ class MapRouter {
     );
   }
 
-  /// Open Race Replay. Routes through provider chosen by current location
-  /// since the riders' rides are arbitrary GPS routes.
+  /// Open Race Replay. Provider is chosen from the riders' recorded
+  /// routes (falling back to current-location preference) so the replay
+  /// always renders on the same basemap as the race detail page —
+  /// avoids mixing AMap (detail) with Google Maps (replay) when the
+  /// device is in mainland China but cached GPS says otherwise.
   static Future<dynamic> openRaceReplay(
     BuildContext context, {
     required String raceName,
@@ -209,7 +222,18 @@ class MapRouter {
   }) async {
     await MapProviderService.ensureResolved();
     if (!context.mounted) return null;
-    final provider = MapRegion.providerForCurrentLocation();
+    // Pick a sample point from the longest available rider route so the
+    // provider matches what the riders actually recorded on.
+    final sample = <LatLng>[];
+    for (final r in riders) {
+      if (r.route.isNotEmpty) {
+        sample.add(r.route.first);
+        if (sample.length >= 8) break;
+      }
+    }
+    final provider = sample.isNotEmpty
+        ? MapRegion.providerForRoute(sample)
+        : MapRegion.providerForCurrentLocation();
     return Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => provider == MapProvider.amap

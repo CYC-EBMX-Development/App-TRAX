@@ -12,8 +12,6 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../../common/network/trax_api.dart';
 import '../../../common/utils/amap_adapter.dart';
-import '../../../common/utils/chaser_dot_icon.dart';
-import '../../../common/utils/polyline_chaser.dart';
 import '../../../common/utils/avatar_marker_icons_amap.dart';
 import '../../../common/utils/cp_marker_icons_amap.dart';
 import '../../../common/utils/start_end_marker_icons_amap.dart';
@@ -77,13 +75,6 @@ class _LapTimerPageAmapState extends State<LapTimerPageAmap> {
   // Self-avatar AMap marker (lazy-built once per session).
   BitmapDescriptor? _meIcon;
 
-  // Direction-of-travel hint on the trail polyline (mirrors trail
-  // detail header). The dot keeps sliding regardless of ride state.
-  PolylineChaser? _chaser;
-  BitmapDescriptor? _chaserDot;
-  Timer? _chaserTimer;
-  double _chaserPhase = 0;
-
   @override
   void initState() {
     super.initState();
@@ -93,25 +84,6 @@ class _LapTimerPageAmapState extends State<LapTimerPageAmap> {
     _loadUserCheckpoints();
     _initLocation();
     _warmMeIcon();
-    _loadChaserDot();
-  }
-
-  Future<void> _loadChaserDot() async {
-    final views = WidgetsBinding.instance.platformDispatcher.views;
-    final dpr = views.isNotEmpty ? views.first.devicePixelRatio : 3.0;
-    final bytes = await ChaserDotIcon.bytes(dpr);
-    if (!mounted) return;
-    setState(() => _chaserDot = BitmapDescriptor.fromBytes(bytes));
-  }
-
-  void _startChaser() {
-    _chaserTimer?.cancel();
-    if (_trailRoute.length < 3) return;
-    _chaser = PolylineChaser(_trailRoute);
-    _chaserTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
-      if (!mounted) return;
-      setState(() => _chaserPhase = (_chaserPhase + 0.00222) % 1.0);
-    });
   }
 
   Future<void> _warmMeIcon() async {
@@ -132,7 +104,6 @@ class _LapTimerPageAmapState extends State<LapTimerPageAmap> {
   void dispose() {
     _svc.removeListener(_onSvcUpdate);
     _mapController?.disponse();
-    _chaserTimer?.cancel();
     WakelockPlus.disable();
     super.dispose();
   }
@@ -171,7 +142,6 @@ class _LapTimerPageAmapState extends State<LapTimerPageAmap> {
       );
     }).toList();
     setState(() => _trailRoute = pts);
-    _startChaser();
     if (pts.isNotEmpty) {
       if (_svc.rideStatus == 'idle' && widget.startLocation != null) {
         _svc.currentPos = widget.startLocation!;
@@ -409,13 +379,13 @@ class _LapTimerPageAmapState extends State<LapTimerPageAmap> {
                         Polyline(
                           points: AmapAdapter.toAmapList(_trailRoute),
                           color: AppColors.primary.withValues(alpha: 0.5),
-                          width: 7,
+                          width: 14,
                         ),
                       if (_svc.route.length >= 2)
                         Polyline(
                           points: AmapAdapter.toAmapList(_svc.route),
-                          color: AppColors.primary,
-                          width: 8,
+                          color: Colors.red,
+                          width: 14,
                         ),
                     },
                     markers: {
@@ -446,15 +416,6 @@ class _LapTimerPageAmapState extends State<LapTimerPageAmap> {
                           icon: _meIcon ?? BitmapDescriptor.defaultMarker,
                           anchor: const Offset(0.5, 0.5),
                           infoWindow: const InfoWindow(title: 'You'),
-                        ),
-                      if (_chaserDot != null &&
-                          (_chaser?.canRender ?? false))
-                        Marker(
-                          position: AmapAdapter.toAmap(
-                              _chaser!.headAt(_chaserPhase)),
-                          icon: _chaserDot!,
-                          anchor: const Offset(0.5, 0.5),
-                          zIndex: 6,
                         ),
                     },
                     onMapCreated: (c) {

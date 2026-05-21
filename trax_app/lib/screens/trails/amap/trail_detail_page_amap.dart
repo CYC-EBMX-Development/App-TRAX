@@ -14,11 +14,13 @@ import '../../../common/network/trax_api.dart';
 import '../../../common/services/map_service.dart';
 import '../../../common/utils/amap_adapter.dart';
 import '../../../common/utils/chaser_dot_icon.dart';
+import '../../../common/utils/cp_marker_icons_amap.dart';
 import '../../../common/utils/polyline_chaser.dart';
 import '../../../common/utils/trax_storage_util.dart';
 import '../../../common/widgets/trax_dialog.dart';
 import '../../../models/ebike.dart';
 import '../../../models/trail.dart';
+import '../../../models/user_checkpoint.dart';
 import '../../../theme/app_theme.dart';
 import '../../../common/widgets/map_router.dart';
 
@@ -54,6 +56,10 @@ class _TrailDetailPageAmapState extends State<TrailDetailPageAmap> {
   String? _locationName;
   late bool _isPublic;
   bool _changed = false;
+
+  /// Per-user checkpoints loaded from the backend (WGS-84; converted to
+  /// GCJ-02 when rendered on AMap).
+  List<UserCheckpoint> _checkpoints = const [];
 
   AMapController? _mapController;
 
@@ -153,8 +159,23 @@ class _TrailDetailPageAmapState extends State<TrailDetailPageAmap> {
     });
     _startChaser();
     WidgetsBinding.instance.addPostFrameCallback((_) => _fitRouteBounds());
+    _loadCheckpoints();
     if (_locationName == null || _locationName!.isEmpty) {
       _fetchLocationName();
+    }
+  }
+
+  Future<void> _loadCheckpoints() async {
+    final id = int.tryParse(trail.id ?? '');
+    if (id == null) return;
+    final resp = await TraxApi.getTrailCheckpoints(id);
+    if (!mounted) return;
+    if (resp.isSuccess() && resp.data is List) {
+      final cps = (resp.data as List)
+          .map((e) => UserCheckpoint.fromJson(e as Map<String, dynamic>))
+          .toList()
+        ..sort((a, b) => a.sequenceIndex.compareTo(b.sequenceIndex));
+      setState(() => _checkpoints = cps);
     }
   }
 
@@ -295,6 +316,8 @@ class _TrailDetailPageAmapState extends State<TrailDetailPageAmap> {
                       _buildStartLapTimerButton(),
                     ],
                     const SizedBox(height: 16),
+                    _buildCheckpointsCard(),
+                    const SizedBox(height: 16),
                     _buildStatsGrid(),
                     SizedBox(
                         height: MediaQuery.of(context).padding.bottom + 16),
@@ -325,10 +348,18 @@ class _TrailDetailPageAmapState extends State<TrailDetailPageAmap> {
       initialCameraPosition: AmapAdapter.initialCamera(_route, zoom: 14),
       polylines: {
         AmapAdapter.routePolyline(_route,
-            width: 2, color: AppColors.primary.withValues(alpha: 0.9)),
+            width: 4, color: AppColors.primary.withValues(alpha: 0.9)),
       },
       markers: {
         ...AmapAdapter.startFinishMarkers(_route),
+        ...CpMarkerIconsAmap.buildMarkers(
+          context,
+          {
+            for (final cp in _checkpoints)
+              cp.sequenceIndex: LatLng(cp.latitude, cp.longitude),
+          },
+          onWarmed: () { if (mounted) setState(() {}); },
+        ),
         if (_chaserDot != null && (_chaser?.canRender ?? false))
           Marker(
             position: AmapAdapter.toAmap(_chaser!.headAt(_chaserPhase)),
@@ -429,6 +460,74 @@ class _TrailDetailPageAmapState extends State<TrailDetailPageAmap> {
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCheckpointsCard() {
+    final id = int.tryParse(trail.id ?? '');
+    if (id == null) return const SizedBox.shrink();
+    final count = _checkpoints.length;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 8,
+              offset: const Offset(0, 2)),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: AppColors.warning.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(Icons.flag, color: AppColors.warning, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('My Checkpoints',
+                    style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textPrimary)),
+                const SizedBox(height: 2),
+                Text('$count / 4 placed along this trail',
+                    style: const TextStyle(
+                        fontSize: 11, color: AppColors.textSecondary)),
+              ],
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              await MapRouter.openTrailCheckpoints(
+                context,
+                trailId: id,
+                trailName: trail.name,
+                trailStartLat: trail.startLatitude,
+                trailStartLng: trail.startLongitude,
+              );
+              if (!mounted) return;
+              await _loadCheckpoints();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            ),
+            child: Text(count == 0 ? 'Configure' : 'Edit'),
           ),
         ],
       ),

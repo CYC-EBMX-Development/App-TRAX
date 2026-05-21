@@ -3,11 +3,9 @@ import 'package:get/get.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'dart:async';
-import '../../common/utils/chaser_dot_icon.dart';
 import '../../common/utils/map_gesture_recognizers.dart';
 import '../../common/utils/cp_marker_icons.dart';
 import '../../common/utils/avatar_marker_icons.dart';
-import '../../common/utils/polyline_chaser.dart';
 import '../../common/utils/start_end_marker_icons.dart';
 import 'package:geolocator/geolocator.dart';
 import 'dart:math' as math;
@@ -86,14 +84,6 @@ class _LapTimerPageState extends State<LapTimerPage> {
   // Self-avatar map marker (built lazily once per session).
   BitmapDescriptor? _meIcon;
 
-  // Direction-of-travel hint on the trail polyline (mirrors trail
-  // detail header). The dot keeps sliding regardless of ride state so
-  // riders can see the trail direction even while paused at the start.
-  PolylineChaser? _chaser;
-  BitmapDescriptor? _chaserDot;
-  Timer? _chaserTimer;
-  double _chaserPhase = 0;
-
   @override
   void initState() {
     super.initState();
@@ -104,25 +94,6 @@ class _LapTimerPageState extends State<LapTimerPage> {
     _loadUserCheckpoints();
     _initLocation();
     _warmMeIcon();
-    _loadChaserDot();
-  }
-
-  Future<void> _loadChaserDot() async {
-    final views = WidgetsBinding.instance.platformDispatcher.views;
-    final dpr = views.isNotEmpty ? views.first.devicePixelRatio : 3.0;
-    final icon = await ChaserDotIcon.bitmap(dpr);
-    if (!mounted) return;
-    setState(() => _chaserDot = icon);
-  }
-
-  void _startChaser() {
-    _chaserTimer?.cancel();
-    if (_trailRoute.length < 3) return;
-    _chaser = PolylineChaser(_trailRoute);
-    _chaserTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
-      if (!mounted) return;
-      setState(() => _chaserPhase = (_chaserPhase + 0.00222) % 1.0);
-    });
   }
 
   Future<void> _warmMeIcon() async {
@@ -143,7 +114,6 @@ class _LapTimerPageState extends State<LapTimerPage> {
   void dispose() {
     _svc.removeListener(_onSvcUpdate);
     _mapController?.dispose();
-    _chaserTimer?.cancel();
     WakelockPlus.disable();
     super.dispose();
   }
@@ -178,7 +148,6 @@ class _LapTimerPageState extends State<LapTimerPage> {
       );
     }).toList();
     setState(() => _trailRoute = pts);
-    _startChaser();
     if (pts.isNotEmpty) {
       if (_svc.rideStatus == 'idle' && widget.startLocation != null) {
         _svc.currentPos = widget.startLocation!;
@@ -455,14 +424,16 @@ class _LapTimerPageState extends State<LapTimerPage> {
                           polylineId: const PolylineId('trail'),
                           points: _trailRoute,
                           color: AppColors.primary.withValues(alpha: 0.5),
-                          width: 3,
+                          width: 6,
+                          zIndex: 0,
                         ),
                       if (_svc.route.length >= 2)
                         Polyline(
                           polylineId: const PolylineId('ride'),
                           points: _svc.route,
-                          color: AppColors.primary,
-                          width: 2,
+                          color: Colors.red,
+                          width: 6,
+                          zIndex: 1,
                         ),
                     },
                     markers: {
@@ -491,16 +462,6 @@ class _LapTimerPageState extends State<LapTimerPage> {
                           position: _svc.currentPos,
                           icon: _meIcon ?? BitmapDescriptor.defaultMarker,
                           anchor: const Offset(0.5, 0.5),
-                        ),
-                      if (_chaserDot != null &&
-                          (_chaser?.canRender ?? false))
-                        Marker(
-                          markerId: const MarkerId('trail_chaser'),
-                          position: _chaser!.headAt(_chaserPhase),
-                          icon: _chaserDot!,
-                          anchor: const Offset(0.5, 0.5),
-                          flat: true,
-                          zIndex: 6,
                         ),
                     },
                     onMapCreated: (c) {

@@ -194,6 +194,11 @@ class _RideDetailPageState extends State<RideDetailPage> {
               route: _route,
               showStart: true,
               showFinish: true,
+              // Single-rider ride record: render in red and skip the
+              // direction-chaser dot (chaser is reserved for trail
+              // previews).
+              showChaser: false,
+              routeColor: Colors.red,
             ),
           ),
           Expanded(

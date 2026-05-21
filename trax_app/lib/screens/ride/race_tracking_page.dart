@@ -52,9 +52,18 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
   int? _selectedBikeId;
 
   static const List<Color> _riderColors = [
-    Color(0xFF4285F4), Color(0xFFEA4335), Color(0xFF34A853),
-    Color(0xFFFBBC04), Color(0xFF9C27B0), Color(0xFFFF6D00),
-    Color(0xFF00BCD4), Color(0xFFE91E63),
+    // Curated multi-rider palette. Trail polyline uses AppColors.primary
+    // (orange #FFB800), so orange/yellow hues are intentionally excluded
+    // from this list per Req 3 (多人 tracking colors must not match
+    // the trail color).
+    Color(0xFF4285F4), // blue
+    Color(0xFFEA4335), // red
+    Color(0xFF34A853), // green
+    Color(0xFF9C27B0), // purple
+    Color(0xFF00BCD4), // cyan
+    Color(0xFFE91E63), // pink
+    Color(0xFF3F51B5), // indigo
+    Color(0xFF8BC34A), // light green
   ];
 
   @override
@@ -617,16 +626,20 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
         polylineId: const PolylineId('trail'),
         points: _trailRoute,
         color: AppColors.primary.withValues(alpha: 0.35),
-        width: 3,
+        width: 6,
+        zIndex: 0,
       ));
     }
-    for (final r in riders) {
+    // Req 4: later riders overlay earlier ones; trail stays at the bottom.
+    for (var i = 0; i < riders.length; i++) {
+      final r = riders[i];
       if (r.route.length >= 2) {
         polylines.add(Polyline(
           polylineId: PolylineId('rider_${r.userId}'),
           points: r.route,
           color: _colorFor(r.userId),
-          width: 2,
+          width: 4,
+          zIndex: i + 1,
         ));
       }
     }

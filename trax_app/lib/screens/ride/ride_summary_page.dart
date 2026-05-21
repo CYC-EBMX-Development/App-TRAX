@@ -123,8 +123,8 @@ class _RideSummaryPageState extends State<RideSummaryPage> {
                       Polyline(
                         polylineId: const PolylineId('route'),
                         points: _route,
-                        color: AppColors.primary,
-                        width: 2,
+                        color: Colors.red,
+                        width: 4,
                       ),
                     },
                     markers: {

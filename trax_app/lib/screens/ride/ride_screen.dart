@@ -547,19 +547,13 @@ class _RideScreenState extends State<RideScreen> {
   // ── Active Race Card ───────────────────────────────────────
 
   Widget _buildActiveRaceCard(Race race) {
-    final canEnterTracking = (race.isPreparing || race.isInProgress) && (race.isHost || race.isRider || race.isObserver);
+    final canEnterTracking = race.isPreparing || race.isInProgress;
     final cardColor = race.isPreparing ? Colors.orange : AppColors.success;
     final statusText = race.isPreparing ? 'Preparing' : 'Racing';
 
     return GestureDetector(
       onTap: () {
-        if (canEnterTracking) {
-          MapRouter.openRaceTracking(context, raceId: race.id).then((_) => _loadUpcomingEvents());
-        } else {
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => RaceDetailPage(raceId: race.id)),
-          ).then((_) => _loadUpcomingEvents());
-        }
+        _openEventByStatus(race);
       },
       child: Container(
         padding: const EdgeInsets.all(14),
@@ -593,13 +587,7 @@ class _RideScreenState extends State<RideScreen> {
             ),
             TextButton(
               onPressed: () {
-                if (canEnterTracking) {
-                  MapRouter.openRaceTracking(context, raceId: race.id).then((_) => _loadUpcomingEvents());
-                } else {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => RaceDetailPage(raceId: race.id)),
-                  ).then((_) => _loadUpcomingEvents());
-                }
+                _openEventByStatus(race);
               },
               style: TextButton.styleFrom(
                 backgroundColor: cardColor,
@@ -687,14 +675,7 @@ class _RideScreenState extends State<RideScreen> {
 
     return GestureDetector(
       onTap: () {
-        // Navigate to tracking page if preparing, otherwise detail page
-        if (race.isPreparing && (isHosted || race.myRole == 'rider')) {
-          MapRouter.openRaceTracking(context, raceId: race.id).then((_) => _loadUpcomingEvents());
-        } else {
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => RaceDetailPage(raceId: race.id)),
-          ).then((_) => _loadUpcomingEvents());
-        }
+        _openEventByStatus(race);
       },
       child: Container(
         margin: const EdgeInsets.only(bottom: 10),
@@ -756,6 +737,12 @@ class _RideScreenState extends State<RideScreen> {
     final m = (seconds % 3600) ~/ 60;
     final s = seconds % 60;
     return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _openEventByStatus(Race race) async {
+    await MapRouter.openEventByStatus(context, race);
+    if (!mounted) return;
+    await _loadUpcomingEvents();
   }
 }
 

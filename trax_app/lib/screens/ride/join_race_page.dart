@@ -79,7 +79,8 @@ class _JoinRacePageState extends State<JoinRacePage> {
     if (resp.isSuccess() && resp.data != null) {
       final race = Race.fromJson(resp.data as Map<String, dynamic>);
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => RaceDetailPage(raceId: race.id)),
+        // Unified event navigation
+        MapRouter.openEventByStatus(context, race),
       );
     } else {
       showTraxSnackBar(context, resp.message, isError: true);
@@ -196,7 +197,8 @@ class _JoinRacePageState extends State<JoinRacePage> {
           return;
         }
         Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => RaceDetailPage(raceId: race.id)),
+          // Unified event navigation
+          MapRouter.openEventByStatus(context, race),
         ).then((_) => _load());
       },
       child: Container(
