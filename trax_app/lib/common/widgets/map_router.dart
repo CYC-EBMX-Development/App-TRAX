@@ -1,16 +1,7 @@
-  /// Unified event navigation by status: waiting -> detail, preparing/in_progress -> tracking
-  static Future<void> openEventByStatus(BuildContext context, Race race) async {
-    if (race.isPreparing || race.isInProgress) {
-      await openRaceTracking(context, raceId: race.id);
-    } else {
-      await Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => RaceDetailPage(raceId: race.id)),
-      );
-    }
-  }
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart' show LatLng;
 
+import '../../models/race.dart';
 import '../services/map_provider.dart';
 import '../utils/map_region.dart';
 import '../../models/ebike.dart';
@@ -21,8 +12,10 @@ import '../../models/trail.dart';
 import '../../screens/trails/trail_detail_page.dart';
 import '../../screens/trails/trail_record_page.dart';
 import '../../screens/trails/trail_save_page.dart';
+import '../../screens/trails/trail_record_mode.dart';
 import '../../screens/ride/free_ride_page.dart';
 import '../../screens/ride/lap_timer_page.dart';
+import '../../screens/ride/race_detail_page.dart';
 import '../../screens/ride/race_tracking_page.dart';
 import '../../screens/ride/ride_summary_page.dart';
 import '../../screens/ride/ride_replay_page.dart';
@@ -58,6 +51,22 @@ import '../../screens/ride/amap/trail_checkpoints_page_amap.dart';
 class MapRouter {
   MapRouter._();
 
+  /// Unified event navigation by status: waiting -> detail,
+  /// preparing/in_progress -> tracking.
+  static Future<void> openEventByStatus(BuildContext context, Race race) async {
+    if (race.isPreparing || race.isInProgress) {
+      await openRaceTracking(
+        context,
+        raceId: race.id,
+        isObserver: race.isObserver,
+      );
+    } else {
+      await Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => RaceDetailPage(raceId: race.id)),
+      );
+    }
+  }
+
   // ───────── Trails ──────────────────────────────────────────────────
 
   /// Open Trail Detail. Provider chosen by the trail's start coordinate.
@@ -86,6 +95,22 @@ class MapRouter {
         builder: (_) => provider == MapProvider.amap
             ? const TrailRecordPageAmap()
             : const TrailRecordPage(),
+      ),
+    );
+  }
+
+  static Future<bool?> openTrailRecordWithMode(
+    BuildContext context, {
+    required TrailRecordLaunchMode mode,
+  }) async {
+    await MapProviderService.ensureResolved();
+    if (!context.mounted) return null;
+    final provider = MapRegion.providerForCurrentLocation();
+    return Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => provider == MapProvider.amap
+            ? TrailRecordPageAmap(initialMode: mode)
+            : TrailRecordPage(initialMode: mode),
       ),
     );
   }
@@ -155,16 +180,43 @@ class MapRouter {
   static Future<dynamic> openRaceTracking(
     BuildContext context, {
     required int raceId,
+    bool isObserver = false,
+    MapProvider? preferredProvider,
     bool replace = false,
-  }) {
-    final provider = MapProviderService.current;
+  }) async {
+    await MapProviderService.ensureResolved();
+    if (!context.mounted) return null;
+
+    final desired = preferredProvider ?? MapProviderService.current;
+    final provider = MapProviderService.resolveForClient(
+      isObserver: isObserver,
+      preferredProvider: desired,
+    );
+
     final route = MaterialPageRoute(
       builder: (_) => provider == MapProvider.amap
           ? RaceTrackingPageAmap(raceId: raceId)
           : RaceTrackingPage(raceId: raceId),
     );
     final nav = Navigator.of(context);
-    return replace ? nav.pushReplacement(route) : nav.push(route);
+    final pushed = replace ? nav.pushReplacement(route) : nav.push(route);
+
+    if (isObserver &&
+        MapProviderService.observerFallbackApplied(preferredProvider: desired)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Watch mode switched to AMap for local compatibility.',
+            ),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      });
+    }
+
+    return pushed;
   }
 
   /// Open Ride Summary. The ride's start coordinate is not on the
@@ -219,6 +271,7 @@ class MapRouter {
     required List<RiderLiveInfo> riders,
     bool isLaps = false,
     int? trailId,
+    bool isObserver = false,
   }) async {
     await MapProviderService.ensureResolved();
     if (!context.mounted) return null;
@@ -231,9 +284,13 @@ class MapRouter {
         if (sample.length >= 8) break;
       }
     }
-    final provider = sample.isNotEmpty
+    final desiredProvider = sample.isNotEmpty
         ? MapRegion.providerForRoute(sample)
         : MapRegion.providerForCurrentLocation();
+    final provider = MapProviderService.resolveForClient(
+      isObserver: isObserver,
+      preferredProvider: desiredProvider,
+    );
     return Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => provider == MapProvider.amap

@@ -190,7 +190,12 @@ class _RaceDetailPageState extends State<RaceDetailPage> {
     final resp = await TraxApi.startRaceEvent(widget.raceId);
     if (!mounted) return;
     if (resp.isSuccess()) {
-      MapRouter.openRaceTracking(context, raceId: widget.raceId, replace: true);
+      MapRouter.openRaceTracking(
+        context,
+        raceId: widget.raceId,
+        isObserver: _race?.isObserver ?? false,
+        replace: true,
+      );
     } else {
       showTraxSnackBar(context, resp.message, isError: true);
     }
@@ -2600,7 +2605,12 @@ class _RaceDetailPageState extends State<RaceDetailPage> {
   }
 
   void _onEnterTracking() {
-    MapRouter.openRaceTracking(context, raceId: widget.raceId, replace: true);
+    MapRouter.openRaceTracking(
+      context,
+      raceId: widget.raceId,
+      isObserver: _race?.isObserver ?? false,
+      replace: true,
+    );
   }
 
   void _onReplayRace() async {
@@ -2619,6 +2629,7 @@ class _RaceDetailPageState extends State<RaceDetailPage> {
       riders: _liveData!.riders,
       isLaps: _race?.isLaps ?? false,
       trailId: _race?.trailId,
+      isObserver: _race?.isObserver ?? false,
     );
   }
 

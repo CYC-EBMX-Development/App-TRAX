@@ -27,9 +27,9 @@ class _MainScreenState extends State<MainScreen> {
 
   late final List<Widget> _pages = [
     HomeScreen(key: _homeKey, onSwitchTab: _switchTab),
-    SessionScreen(key: _sessionKey),
-    const SizedBox(),
     TrailsScreen(key: _trailsKey),
+    const SizedBox(),
+    SessionScreen(key: _sessionKey),
     GarageScreen(key: _garageKey),
   ];
 
@@ -46,10 +46,10 @@ class _MainScreenState extends State<MainScreen> {
         _homeKey.currentState?.refresh();
         break;
       case 1:
-        _sessionKey.currentState?.refresh();
+        _trailsKey.currentState?.refresh();
         break;
       case 3:
-        _trailsKey.currentState?.refresh();
+        _sessionKey.currentState?.refresh();
         break;
       case 4:
         _garageKey.currentState?.refresh();
@@ -80,9 +80,9 @@ class _MainScreenState extends State<MainScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
               _buildNavItem(Icons.home_outlined, Icons.home, 'Home', 0),
-              _buildNavItem(Icons.timeline_outlined, Icons.timeline, 'Session', 1),
+              _buildNavItem(Icons.map_outlined, Icons.map, 'Map', 1),
               const SizedBox(width: 48),
-              _buildNavItem(Icons.map_outlined, Icons.map, 'Trails', 3),
+              _buildNavItem(Icons.timeline_outlined, Icons.timeline, 'Session', 3),
               _buildNavItem(Icons.garage_outlined, Icons.garage, 'Garage', 4),
             ],
           ),

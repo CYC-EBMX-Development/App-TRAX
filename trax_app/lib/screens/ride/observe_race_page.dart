@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../common/network/trax_api.dart';
+import '../../common/widgets/map_router.dart';
 import '../../common/widgets/trax_refresh_button.dart';
 import '../../models/race.dart';
 import '../../theme/app_theme.dart';
@@ -56,10 +57,7 @@ class _ObserveRacePageState extends State<ObserveRacePage> {
     if (!mounted) return;
     if (resp.isSuccess() && resp.data != null) {
       final race = Race.fromJson(resp.data as Map<String, dynamic>);
-      Navigator.of(context).pushReplacement(
-        // Unified event navigation
-        MapRouter.openEventByStatus(context, race),
-      );
+      await MapRouter.openEventByStatus(context, race);
     } else {
       showTraxSnackBar(context, resp.message, isError: true);
     }
@@ -69,10 +67,7 @@ class _ObserveRacePageState extends State<ObserveRacePage> {
     final resp = await TraxApi.observeRace(race.id);
     if (!mounted) return;
     if (resp.isSuccess()) {
-      Navigator.of(context).pushReplacement(
-        // Unified event navigation
-        MapRouter.openEventByStatus(context, race),
-      );
+      await MapRouter.openEventByStatus(context, race);
     } else {
       showTraxSnackBar(context, resp.message, isError: true);
     }
@@ -164,11 +159,9 @@ class _ObserveRacePageState extends State<ObserveRacePage> {
     final statusLabel = race.isInProgress ? 'Live' : 'Waiting';
 
     return GestureDetector(
-      onTap: () {
-        Navigator.of(context).push(
-          // Unified event navigation
-          MapRouter.openEventByStatus(context, race),
-        ).then((_) => _load());
+      onTap: () async {
+        await MapRouter.openEventByStatus(context, race);
+        _load();
       },
       child: Container(
         margin: const EdgeInsets.only(bottom: 10),

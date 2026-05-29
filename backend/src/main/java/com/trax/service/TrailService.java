@@ -226,6 +226,45 @@ public class TrailService {
     }
 
     /**
+     * Visible trails within {@code radiusMeters} of (lat,lng), sorted by exact
+     * distance ascending. Uses a bounding-box DB filter then refines in Java.
+     * Cap defaults to 50 rows.
+     */
+    public List<TrailDto> getVisibleNearby(Long userId, double lat, double lng,
+                                           double radiusMeters, int limit) {
+        // 1 deg latitude ≈ 111_320 m; 1 deg longitude scales by cos(lat).
+        double latDelta = radiusMeters / 111_320.0;
+        double cosLat = Math.cos(Math.toRadians(lat));
+        double lngDelta = cosLat == 0 ? latDelta : radiusMeters / (111_320.0 * cosLat);
+        // Pull a generous superset from DB, then refine.
+        List<Trail> raw = trailRepository.findVisibleInBoundingBox(
+                userId,
+                lat - latDelta, lat + latDelta,
+                lng - lngDelta, lng + lngDelta,
+                Math.max(limit * 4, 100));
+        List<Trail> filtered = new ArrayList<>();
+        for (Trail t : raw) {
+            if (t.getStartLatitude() == null || t.getStartLongitude() == null) continue;
+            double d = GeoUtils.haversineKm(lat, lng,
+                    t.getStartLatitude(), t.getStartLongitude()) * 1000.0;
+            if (d <= radiusMeters) filtered.add(t);
+        }
+        filtered.sort((a, b) -> Double.compare(
+                GeoUtils.haversineKm(lat, lng, a.getStartLatitude(), a.getStartLongitude()),
+                GeoUtils.haversineKm(lat, lng, b.getStartLatitude(), b.getStartLongitude())));
+        if (filtered.size() > limit) {
+            filtered = filtered.subList(0, limit);
+        }
+        List<Long> creatorIds = filtered.stream()
+                .map(Trail::getCreatorId).distinct().collect(Collectors.toList());
+        Map<Long, User> creatorMap = userRepository.findAllById(creatorIds).stream()
+                .collect(Collectors.toMap(User::getId, u -> u));
+        return filtered.stream()
+                .map(t -> TrailDto.fromEntity(t, creatorMap.get(t.getCreatorId())))
+                .toList();
+    }
+
+    /**
      * Backfill missing thumbnails for trails whose imageUrl is null/empty.
      * Returns a summary map: total / generated / skipped (no points) / failed.
      */

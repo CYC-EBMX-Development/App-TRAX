@@ -431,6 +431,24 @@ class TraxApi {
   static Future<AppResponse> getTrails() =>
       get(TraxUrl.trails, showLoading: false);
 
+  static Future<AppResponse> getNearbyTrails({
+    required double lat,
+    required double lng,
+    double radius = 20000,
+    int limit = 50,
+  }) =>
+      get(
+        TraxUrl.trails,
+        path: '/nearby',
+        queryParameters: {
+          'lat': lat,
+          'lng': lng,
+          'radius': radius,
+          'limit': limit,
+        },
+        showLoading: false,
+      );
+
   static Future<AppResponse> createTrail(Map<String, dynamic> data) =>
       post(TraxUrl.trails, path: '/create', data: data,
           headers: _TraxContentType.jsonHeaders);

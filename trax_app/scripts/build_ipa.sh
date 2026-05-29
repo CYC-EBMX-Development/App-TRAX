@@ -20,6 +20,14 @@ OUT_DIR="$APP_ROOT/build/dist"
 mkdir -p "$OUT_DIR"
 source "$APP_ROOT/scripts/release_naming.sh"
 
+# Pick up AMAP_KEY / AMAP_*_SDK_KEY / ASC_* from the shared deploy env
+# (same file build_apk.sh uses). Without this the AMap REST calls (place
+# search, reverse-geocode, directions) silently return empty results.
+if [[ -f "$HOME/trax-deploy.env" ]]; then
+  # shellcheck disable=SC1091
+  source "$HOME/trax-deploy.env"
+fi
+
 API_BASE_URL="${API_BASE_URL:-http://43.99.48.204/api}"
 AMAP_KEY="${AMAP_KEY:-}"
 UPLOAD=false

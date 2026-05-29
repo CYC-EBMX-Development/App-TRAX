@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import '../../common/network/trax_api.dart';
 import '../../common/utils/trax_storage_util.dart';
 import '../../common/widgets/bike_picker.dart';
+import '../../common/widgets/map_router.dart';
 import '../../common/widgets/trax_refresh_button.dart';
 import '../../models/race.dart';
 import '../../models/trail.dart';
@@ -19,7 +20,8 @@ import 'package:trax_app/common/widgets/page_code_badge.dart';
 /// lobby phase and runs the target lap count individually after Go.
 /// Final ranking is by best single-lap time.
 class HostLapsPage extends StatefulWidget {
-  const HostLapsPage({super.key});
+  final Trail? initialTrail;
+  const HostLapsPage({super.key, this.initialTrail});
 
   @override
   State<HostLapsPage> createState() => _HostLapsPageState();
@@ -80,8 +82,19 @@ class _HostLapsPageState extends State<HostLapsPage> {
           .map((e) => Trail.fromJson(e as Map<String, dynamic>))
           .where((t) => t.type == 'lap')
           .toList();
+      final initial = widget.initialTrail;
+      Trail? initialPicked;
+      if (initial != null) {
+        for (final t in list) {
+          if (t.id == initial.id) {
+            initialPicked = t;
+            break;
+          }
+        }
+      }
       setState(() {
         _trails = list;
+        if (initialPicked != null) _selectedTrail = initialPicked;
         _loading = false;
       });
     } else {
@@ -157,10 +170,7 @@ class _HostLapsPageState extends State<HostLapsPage> {
     if (!mounted) return;
     if (resp.isSuccess() && resp.data != null) {
       final race = Race.fromJson(resp.data as Map<String, dynamic>);
-      Navigator.of(context).pushReplacement(
-        // Unified event navigation
-        MapRouter.openEventByStatus(context, race),
-      );
+      await MapRouter.openEventByStatus(context, race);
     } else {
       showTraxSnackBar(context, resp.message, isError: true);
     }

@@ -17,6 +17,7 @@ import '../../../common/widgets/map_router.dart';
 import '../../../common/widgets/page_code_badge.dart';
 import '../../../theme/app_theme.dart';
 import '../../../widgets/map_search_box.dart';
+import '../trail_record_mode.dart';
 
 /// Native-AMap variant of `TrailRecordPage` used when the rider is inside
 /// Chinese mainland. Phase 4 core implementation: supports the everyday
@@ -28,7 +29,11 @@ import '../../../widgets/map_search_box.dart';
 /// later phase): location picker, simulate-lap (pick / draw), lap-recording
 /// auto-stop, map type switcher, mock GPS replay.
 class TrailRecordPageAmap extends StatefulWidget {
-  const TrailRecordPageAmap({super.key});
+  final TrailRecordLaunchMode initialMode;
+  const TrailRecordPageAmap({
+    super.key,
+    this.initialMode = TrailRecordLaunchMode.trailRecord,
+  });
 
   @override
   State<TrailRecordPageAmap> createState() => _TrailRecordPageAmapState();
@@ -103,6 +108,20 @@ class _TrailRecordPageAmapState extends State<TrailRecordPageAmap> {
     super.initState();
     WakelockPlus.enable();
     _initLocation();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      switch (widget.initialMode) {
+        case TrailRecordLaunchMode.trailRecord:
+          break;
+        case TrailRecordLaunchMode.lap:
+          // Do NOT auto-start lap recording — see trail_record_page.dart
+          // for rationale. User must press the Start button.
+          break;
+        case TrailRecordLaunchMode.pickPoint:
+          _enterLapPickMode();
+          break;
+      }
+    });
   }
 
   Future<void> _initLocation() async {
@@ -897,7 +916,12 @@ class _TrailRecordPageAmapState extends State<TrailRecordPageAmap> {
           Text(
             _isPickingLapPoints
                 ? 'Pick Waypoints'
-                : (_isMockMode ? 'Simulating Lap' : 'Record Trail'),
+                : (_isMockMode
+                    ? 'Simulating Lap'
+                    : ((_isLapRecordingMode ||
+                            widget.initialMode == TrailRecordLaunchMode.lap)
+                        ? 'Record Lap'
+                        : 'Record Trail')),
             style: const TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.w700,
@@ -955,66 +979,9 @@ class _TrailRecordPageAmapState extends State<TrailRecordPageAmap> {
     }
     switch (_status) {
       case 'idle':
-        return Column(
-          children: [
-            SizedBox(
-              width: double.infinity,
-              height: 56,
-              child: ElevatedButton.icon(
-                onPressed: _onStart,
-                icon: const Icon(Icons.play_arrow, size: 28),
-                label: const Text('Start Recording',
-                    style: TextStyle(
-                        fontSize: 18, fontWeight: FontWeight.w600)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(28)),
-                ),
-              ),
-            ),
-            const SizedBox(height: 10),
-            SizedBox(
-              width: double.infinity,
-              height: 50,
-              child: OutlinedButton.icon(
-                onPressed: _onStartLapRecording,
-                icon: const Icon(Icons.flag, size: 22),
-                label: const Text('Start Lap Recording',
-                    style: TextStyle(
-                        fontSize: 16, fontWeight: FontWeight.w600)),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppColors.primary,
-                  side:
-                      const BorderSide(color: AppColors.primary, width: 2),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(25)),
-                ),
-              ),
-            ),
-            const SizedBox(height: 10),
-            SizedBox(
-              width: double.infinity,
-              height: 50,
-              child: OutlinedButton.icon(
-                onPressed: _enterLapPickMode,
-                icon: const Icon(Icons.touch_app, size: 22),
-                label: const Text('Pick Points → Auto-Run',
-                    style: TextStyle(
-                        fontSize: 16, fontWeight: FontWeight.w600)),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppColors.textPrimary,
-                  side: BorderSide(
-                      color: AppColors.textSecondary.withValues(alpha: 0.4),
-                      width: 1.5),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(25)),
-                ),
-              ),
-            ),
-          ],
-        );
+        // Mode-dedicated Start button. No auto-start — user explicitly
+        // taps Start. Each launch mode lives on its own focused page.
+        return _buildIdleControlsForMode();
       case 'recording':
         return Row(children: [
           Expanded(
@@ -1088,6 +1055,67 @@ class _TrailRecordPageAmapState extends State<TrailRecordPageAmap> {
         ]);
       default:
         return const SizedBox.shrink();
+    }
+  }
+
+  /// Idle-state controls. Single big Start button tailored to the mode
+  /// the user picked on the previous screen.
+  Widget _buildIdleControlsForMode() {
+    switch (widget.initialMode) {
+      case TrailRecordLaunchMode.lap:
+        return SizedBox(
+          width: double.infinity,
+          height: 56,
+          child: ElevatedButton.icon(
+            onPressed: _onStartLapRecording,
+            icon: const Icon(Icons.flag, size: 26),
+            label: const Text(
+              'Start Lap Recording',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+            ),
+          ),
+        );
+      case TrailRecordLaunchMode.pickPoint:
+        return SizedBox(
+          width: double.infinity,
+          height: 56,
+          child: ElevatedButton.icon(
+            onPressed: _isPickingLapPoints ? null : _enterLapPickMode,
+            icon: const Icon(Icons.touch_app, size: 26),
+            label: const Text(
+              'Pick Points → Auto-Run',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+            ),
+          ),
+        );
+      case TrailRecordLaunchMode.trailRecord:
+        return SizedBox(
+          width: double.infinity,
+          height: 56,
+          child: ElevatedButton.icon(
+            onPressed: _onStart,
+            icon: const Icon(Icons.play_arrow, size: 28),
+            label: const Text(
+              'Start Recording',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+            ),
+          ),
+        );
     }
   }
 
