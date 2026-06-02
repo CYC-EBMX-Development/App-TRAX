@@ -37,7 +37,12 @@ import '../../common/widgets/map_router.dart';
 /// and a Cancel / "Add Checkpoint" action bar (max 4 per user-trail).
 class LapTimerSetupPage extends StatefulWidget {
   final EBike selectedBike;
-  const LapTimerSetupPage({super.key, required this.selectedBike});
+  final Trail? initialTrail;
+  const LapTimerSetupPage({
+    super.key,
+    required this.selectedBike,
+    this.initialTrail,
+  });
 
   @override
   State<LapTimerSetupPage> createState() => _LapTimerSetupPageState();
@@ -117,6 +122,13 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
           .map((e) => Trail.fromJson(e as Map<String, dynamic>))
           .where((t) => t.type == 'lap')
           .toList();
+      final initial = widget.initialTrail;
+      if (initial != null) {
+        final match = _trails.where((t) => t.id == initial.id).toList();
+        final picked = match.isNotEmpty ? match.first : initial;
+        _autoSelectorShown = true;
+        await _applySelectedTrail(picked);
+      }
     }
     setState(() => _isLoadingTrails = false);
   }

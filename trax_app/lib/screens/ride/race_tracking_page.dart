@@ -39,8 +39,6 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
   bool _mapReady = false;
   LatLng _myPos = const LatLng(0, 0);
   bool _hasLocation = false;
-  bool _isPicking = false;
-  LatLng? _pickedLocation;
   List<LatLng> _trailRoute = [];
   List<UserCheckpoint> _myCheckpoints = [];
   final Map<int, bool> _riderVisibility = {};
@@ -54,9 +52,18 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
   int? _selectedBikeId;
 
   static const List<Color> _riderColors = [
-    Color(0xFF4285F4), Color(0xFFEA4335), Color(0xFF34A853),
-    Color(0xFFFBBC04), Color(0xFF9C27B0), Color(0xFFFF6D00),
-    Color(0xFF00BCD4), Color(0xFFE91E63),
+    // Curated multi-rider palette. Trail polyline uses AppColors.primary
+    // (orange #FFB800), so orange/yellow hues are intentionally excluded
+    // from this list per Req 3 (多人 tracking colors must not match
+    // the trail color).
+    Color(0xFF4285F4), // blue
+    Color(0xFFEA4335), // red
+    Color(0xFF34A853), // green
+    Color(0xFF9C27B0), // purple
+    Color(0xFF00BCD4), // cyan
+    Color(0xFFE91E63), // pink
+    Color(0xFF3F51B5), // indigo
+    Color(0xFF8BC34A), // light green
   ];
 
   @override
@@ -105,11 +112,6 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
     _locationTimer?.cancel();
     _locationTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
       try {
-        if (_pickedLocation != null) {
-          final loc = _pickedLocation!;
-          TraxApi.reportLocation(widget.raceId, loc.latitude, loc.longitude);
-          return;
-        }
         final pos = await Geolocator.getCurrentPosition(
           locationSettings:
               const LocationSettings(accuracy: LocationAccuracy.high),
@@ -445,37 +447,6 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
 
   double get _mapCenterY => MediaQuery.of(context).size.height / 2;
 
-  Future<void> _onPickLocationTap() async {
-    if (_isPicking) {
-      if (_mapController == null) return;
-      final center = await _mapController!.getLatLng(
-        ScreenCoordinate(
-          x: (MediaQuery.of(context).size.width / 2).round(),
-          y: _mapCenterY.round(),
-        ),
-      );
-      setState(() {
-        _isPicking = false;
-        _pickedLocation = center;
-        _myPos = center;
-        _hasLocation = true;
-      });
-      TraxApi.reportLocation(widget.raceId, center.latitude, center.longitude);
-    } else {
-      setState(() {
-        _isPicking = true;
-        _pickedLocation = null;
-      });
-    }
-  }
-
-  void _clearPickedLocation() {
-    setState(() {
-      _pickedLocation = null;
-      _isPicking = false;
-    });
-  }
-
   Future<void> _onReady() async {
     final resp = await TraxApi.readyForRace(widget.raceId);
     if (!mounted) return;
@@ -610,17 +581,6 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
               if (_hasLocation) _animateTo(_myPos);
             },
           ),
-          if (_isPicking)
-            Positioned(
-              left: 0,
-              right: 0,
-              top: _mapCenterY - 20,
-              child: const IgnorePointer(
-                child: Center(
-                    child:
-                        Icon(Icons.add, size: 40, color: AppColors.error)),
-              ),
-            ),
           // Top Bar
           Positioned(
             top: MediaQuery.of(context).padding.top + 8,
@@ -630,25 +590,6 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
               children: [
                 _circleBtn(Icons.arrow_back, () => Navigator.pop(context)),
                 const SizedBox(width: 8),
-                if (_race!.isPreparing) ...[
-                  CircleAvatar(
-                    radius: 20,
-                    backgroundColor:
-                        _isPicking ? AppColors.primary : Colors.white,
-                    child: IconButton(
-                      icon: Icon(
-                        _isPicking ? Icons.check : Icons.pin_drop,
-                        color: _isPicking
-                            ? Colors.white
-                            : AppColors.textPrimary,
-                        size: 20,
-                      ),
-                      onPressed: _onPickLocationTap,
-                      padding: EdgeInsets.zero,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                ],
                 Expanded(child: _buildStatusPill()),
                 const SizedBox(width: 8),
                 if (_myCheckpoints.isNotEmpty) ...[
@@ -659,71 +600,12 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
               ],
             ),
           ),
-          if (_isPicking)
+          // Live ranking overlay (top-right, below top bar)
+          if (_race?.isInProgress == true && riders.isNotEmpty)
             Positioned(
-              top: MediaQuery.of(context).padding.top + 56,
-              left: 16,
-              right: 16,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: AppColors.surface,
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.1),
-                        blurRadius: 8)
-                  ],
-                ),
-                child: const Text(
-                  'Move map to set your start position, then tap ✓',
-                  style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            ),
-          if (_pickedLocation != null && !_isPicking)
-            Positioned(
-              top: MediaQuery.of(context).padding.top + 56,
-              left: 16,
-              right: 16,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: AppColors.surface,
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.1),
-                        blurRadius: 8)
-                  ],
-                ),
-                child: Row(children: [
-                  const Icon(Icons.pin_drop,
-                      size: 16, color: AppColors.error),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      'Custom start: ${_pickedLocation!.latitude.toStringAsFixed(5)}, ${_pickedLocation!.longitude.toStringAsFixed(5)}',
-                      style: const TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textPrimary),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  GestureDetector(
-                    onTap: _clearPickedLocation,
-                    child: const Icon(Icons.close,
-                        size: 16, color: AppColors.textSecondary),
-                  ),
-                ]),
-              ),
+              top: MediaQuery.of(context).padding.top + 64,
+              right: 12,
+              child: _buildLiveRankingOverlay(riders),
             ),
           // Bottom
           Positioned(
@@ -744,16 +626,20 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
         polylineId: const PolylineId('trail'),
         points: _trailRoute,
         color: AppColors.primary.withValues(alpha: 0.35),
-        width: 5,
+        width: 6,
+        zIndex: 0,
       ));
     }
-    for (final r in riders) {
+    // Req 4: later riders overlay earlier ones; trail stays at the bottom.
+    for (var i = 0; i < riders.length; i++) {
+      final r = riders[i];
       if (r.route.length >= 2) {
         polylines.add(Polyline(
           polylineId: PolylineId('rider_${r.userId}'),
           points: r.route,
           color: _colorFor(r.userId),
           width: 4,
+          zIndex: i + 1,
         ));
       }
     }
@@ -1703,6 +1589,124 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
             width: 40,
             height: 40,
             child: Icon(icon, size: 20, color: AppColors.textPrimary)),
+      ),
+    );
+  }
+
+  // ── Live ranking overlay (top-right of map) ───────────
+  /// Builds a compact floating leaderboard showing the top 5 riders
+  /// ranked by laps completed, then by distance covered, then by speed.
+  /// Updates in real time as [_liveData] is polled.
+  List<RiderLiveInfo> _rankedRiders(List<RiderLiveInfo> riders) {
+    final list = [...riders];
+    list.sort((a, b) {
+      // Finished riders ranked by their explicit finishRank first.
+      final aFin = a.status == 'finished' && a.finishRank != null;
+      final bFin = b.status == 'finished' && b.finishRank != null;
+      if (aFin && bFin) return a.finishRank!.compareTo(b.finishRank!);
+      if (aFin) return -1;
+      if (bFin) return 1;
+      // DNF riders sink to the bottom.
+      if (a.status == 'dnf' && b.status != 'dnf') return 1;
+      if (b.status == 'dnf' && a.status != 'dnf') return -1;
+      // Active riders: more laps wins, then more distance, then faster.
+      final lapCmp = b.completedLaps.compareTo(a.completedLaps);
+      if (lapCmp != 0) return lapCmp;
+      final distCmp = b.distanceKm.compareTo(a.distanceKm);
+      if (distCmp != 0) return distCmp;
+      return b.speed.compareTo(a.speed);
+    });
+    return list;
+  }
+
+  Widget _buildLiveRankingOverlay(List<RiderLiveInfo> riders) {
+    final ranked = _rankedRiders(riders).take(5).toList();
+    return Container(
+      width: 168,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.95),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.12), blurRadius: 8),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: const [
+              Icon(Icons.leaderboard, size: 14, color: AppColors.primary),
+              SizedBox(width: 4),
+              Text('Live Ranking',
+                  style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textPrimary)),
+            ],
+          ),
+          const SizedBox(height: 6),
+          for (int i = 0; i < ranked.length; i++)
+            _buildRankRow(i + 1, ranked[i]),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRankRow(int rank, RiderLiveInfo r) {
+    final isMe = r.userId == _myId;
+    final rankColor = rank == 1
+        ? const Color(0xFFFFC107)
+        : rank == 2
+            ? const Color(0xFFB0BEC5)
+            : rank == 3
+                ? const Color(0xFFCD7F32)
+                : AppColors.textSecondary;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 16,
+            child: Text('$rank',
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    color: rankColor)),
+          ),
+          Container(
+            width: 8,
+            height: 8,
+            margin: const EdgeInsets.only(right: 4),
+            decoration: BoxDecoration(
+              color: _colorFor(r.userId),
+              shape: BoxShape.circle,
+            ),
+          ),
+          Expanded(
+            child: Text(
+              r.userName ?? 'Rider',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: isMe ? FontWeight.w800 : FontWeight.w600,
+                color: isMe ? AppColors.primary : AppColors.textPrimary,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(width: 4),
+          Text(
+            r.status == 'dnf'
+                ? 'DNF'
+                : 'L${r.completedLaps}',
+            style: const TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textSecondary),
+          ),
+        ],
       ),
     );
   }

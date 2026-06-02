@@ -16,7 +16,15 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+26051407
+# Versioning convention (must stay in sync with scripts/build_apk.sh,
+# scripts/build_ipa.sh and lib/common/services/app_update_service.dart):
+#   version (CFBundleShortVersionString / Android versionName):
+#     `1.0.0` — semantic/marketing version, surfaced in the system Settings UI
+#   build  (CFBundleVersion / Android versionCode):
+#     `YYMMDDNN` 8-digit integer — e.g. 26051805
+# The OTA client compares the YYMMDDNN integer; the version name is only
+# shown next to it as `1.0.0 (260518-05)` for human readability.
+version: 1.0.0+26051805
 
 environment:
   sdk: ^3.11.4

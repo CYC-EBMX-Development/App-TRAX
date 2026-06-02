@@ -349,7 +349,10 @@ public class RaceService {
             if (!bikes.isEmpty()) {
                 rideReq.setBicycleId(bikes.get(0).getId());
             }
-            rideReq.setMode("with_module");
+            // Always use phone GPS for race rides — each participant's
+            // device uploads its real position via /api/races/{id}/location.
+            // We never auto-launch the backend module simulator here.
+            rideReq.setMode("without_module");
             rideReq.setTrailId(race.getTrail().getId());
             rideReq.setTargetLaps(race.getTargetLaps());
 
@@ -363,18 +366,6 @@ public class RaceService {
             rp.setRide(ride);
             rp.setStatus("racing");
             participantRepo.save(rp);
-
-            // Start race simulation for this rider
-            if (ride != null) {
-                try {
-                    moduleSimulatorService.startRaceSimulation(
-                            ride.getId(),
-                            rp.getLatitude(),
-                            rp.getLongitude());
-                } catch (Exception e) {
-                    // Don't fail the race start if simulation fails
-                }
-            }
         }
 
         List<RaceParticipant> all = participantRepo.findByRaceId(raceId);

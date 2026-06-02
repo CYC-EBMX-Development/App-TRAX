@@ -72,14 +72,17 @@ class _RaceReplayPageState extends State<RaceReplayPage> {
   double _speed = 1.0;
 
   static const _riderColors = [
-    Color(0xFF4285F4),
-    Color(0xFFEA4335),
-    Color(0xFF34A853),
-    Color(0xFFFBBC04),
-    Color(0xFF9C27B0),
-    Color(0xFFFF6D00),
-    Color(0xFF00BCD4),
-    Color(0xFFE91E63),
+    // Curated multi-rider palette. Avoid orange/yellow hues so the
+    // riders never collide with the trail color (AppColors.primary,
+    // #FFB800). Matches the live race tracking palette.
+    Color(0xFF4285F4), // blue
+    Color(0xFFEA4335), // red
+    Color(0xFF34A853), // green
+    Color(0xFF9C27B0), // purple
+    Color(0xFF00BCD4), // cyan
+    Color(0xFFE91E63), // pink
+    Color(0xFF3F51B5), // indigo
+    Color(0xFF8BC34A), // light green
   ];
 
   @override
@@ -548,6 +551,8 @@ class _RaceReplayPageState extends State<RaceReplayPage> {
 
   Set<Polyline> _buildPolylines() {
     final set = <Polyline>{};
+    // Req 4: later riders overlay earlier ones via increasing zIndex.
+    var z = 1;
     for (final r in _riders) {
       if (!(_visibility[r.rider.userId] ?? true)) continue;
       if (r.route.length < 2) continue;
@@ -558,6 +563,7 @@ class _RaceReplayPageState extends State<RaceReplayPage> {
           points: r.route.sublist(0, end + 1),
           color: _colorFor(r.rider.userId),
           width: 4,
+          zIndex: z++,
         ),
       );
     }

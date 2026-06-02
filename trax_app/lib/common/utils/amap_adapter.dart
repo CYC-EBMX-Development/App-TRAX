@@ -2,7 +2,7 @@ import 'dart:math' as math;
 
 import 'package:amap_flutter_base/amap_flutter_base.dart' as amap;
 import 'package:amap_flutter_map/amap_flutter_map.dart' as amap_map;
-import 'package:flutter/material.dart' show Offset;
+import 'package:flutter/material.dart' show Color, Offset;
 import 'package:google_maps_flutter/google_maps_flutter.dart' as gmap;
 
 import 'coord_transform.dart';
@@ -56,11 +56,14 @@ class AmapAdapter {
   }
 
   /// Build a polyline overlay from a WGS-84 route.
+  ///
+  /// Default width is `8` (doubled from the previous default of `4`) to
+  /// match the bumped trail-line styling used app-wide.
   static amap_map.Polyline routePolyline(List<gmap.LatLng> points,
-      {double width = 8}) {
+      {double width = 8, Color? color}) {
     return amap_map.Polyline(
       points: toAmapList(points),
-      color: AppColors.primary,
+      color: color ?? AppColors.primary,
       width: width,
     );
   }

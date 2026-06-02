@@ -77,14 +77,17 @@ class _RaceReplayPageAmapState extends State<RaceReplayPageAmap> {
   double _speed = 1.0;
 
   static const _riderColors = [
-    Color(0xFF4285F4),
-    Color(0xFFEA4335),
-    Color(0xFF34A853),
-    Color(0xFFFBBC04),
-    Color(0xFF9C27B0),
-    Color(0xFFFF6D00),
-    Color(0xFF00BCD4),
-    Color(0xFFE91E63),
+    // Curated multi-rider palette. Avoid orange/yellow hues so the
+    // riders never collide with the trail color (AppColors.primary,
+    // #FFB800). Matches the live race tracking palette.
+    Color(0xFF4285F4), // blue
+    Color(0xFFEA4335), // red
+    Color(0xFF34A853), // green
+    Color(0xFF9C27B0), // purple
+    Color(0xFF00BCD4), // cyan
+    Color(0xFFE91E63), // pink
+    Color(0xFF3F51B5), // indigo
+    Color(0xFF8BC34A), // light green
   ];
 
   @override
@@ -594,9 +597,15 @@ class _RaceReplayPageAmapState extends State<RaceReplayPageAmap> {
           AmapAdapter.toAmap(pts.first), 16));
       return;
     }
-    double minLat = pts.first.latitude, maxLat = pts.first.latitude;
-    double minLng = pts.first.longitude, maxLng = pts.first.longitude;
-    for (final p in pts) {
+    // Convert all WGS-84 points to GCJ-02 BEFORE computing bounds —
+    // otherwise the AMap basemap (which is GCJ-02) renders the camera
+    // at the wrong location (it'd match what Google Maps would show
+    // for the same raw coords, ~hundreds of metres off in mainland
+    // China).
+    final amapPts = AmapAdapter.toAmapList(pts);
+    double minLat = amapPts.first.latitude, maxLat = amapPts.first.latitude;
+    double minLng = amapPts.first.longitude, maxLng = amapPts.first.longitude;
+    for (final p in amapPts) {
       if (p.latitude < minLat) minLat = p.latitude;
       if (p.latitude > maxLat) maxLat = p.latitude;
       if (p.longitude < minLng) minLng = p.longitude;

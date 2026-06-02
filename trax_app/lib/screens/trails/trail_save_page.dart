@@ -106,7 +106,7 @@ class _TrailSavePageState extends State<TrailSavePage> {
                         polylineId: const PolylineId('trail'),
                         points: widget.route,
                         color: AppColors.primary,
-                        width: 4,
+                        width: 2,
                       ),
                     },
                     markers: {

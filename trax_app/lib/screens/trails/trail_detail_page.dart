@@ -1,10 +1,17 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/widgets.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../../common/services/map_service.dart';
+import '../../common/utils/chaser_dot_icon.dart';
+import '../../common/utils/cp_marker_icons.dart';
+import '../../common/utils/polyline_chaser.dart';
 import '../../common/utils/start_end_marker_icons.dart';
 import 'package:intl/intl.dart';
 import '../../models/trail.dart';
 import '../../models/ebike.dart';
+import '../../models/user_checkpoint.dart';
 import '../../common/network/trax_api.dart';
 import '../../common/global/global_user_info.dart';
 import '../../common/utils/trax_storage_util.dart';
@@ -12,7 +19,15 @@ import '../../common/utils/map_gesture_recognizers.dart';
 import '../../common/widgets/trax_dialog.dart';
 import '../../theme/app_theme.dart';
 import '../../common/widgets/map_router.dart';
+import '../ride/host_laps_page.dart';
+import '../ride/host_race_page.dart';
 import 'package:trax_app/common/widgets/page_code_badge.dart';
+
+// NOTE: The map screen now embeds [TrailDetailInlineSheet] in a draggable
+// bottom panel rather than pushing this full-page route on every tap. The
+// full-page variant is still kept for callers outside the map (e.g. the
+// home screen's "Discover" trail card list) and for the back-button
+// trail-mutation contract (`Navigator.pop(_changed)`).
 
 class TrailDetailPage extends StatefulWidget {
   final Trail trail;
@@ -29,6 +44,18 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
   late bool _isPublic;
   bool _changed = false;
 
+  /// Per-user checkpoints loaded from the backend for this trail (max 4).
+  List<UserCheckpoint> _checkpoints = const [];
+
+  GoogleMapController? _mapController;
+
+  // Direction-of-travel hint: a small blue dot slides along the route
+  // on a repeating timer, similar to an indeterminate progress bar.
+  PolylineChaser? _chaser;
+  BitmapDescriptor? _chaserDot;
+  Timer? _chaserTimer;
+  double _chaserPhase = 0;
+
   Trail get trail => widget.trail;
   bool get _isOwner => trail.creatorId == GlobalUserInfo.instance.id.value;
 
@@ -38,7 +65,62 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
     _isPublic = trail.isPublic;
     // Use stored location first, geocode as fallback
     _locationName = trail.location;
+    _loadChaserDot();
     _loadPoints();
+  }
+
+  @override
+  void dispose() {
+    _chaserTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadChaserDot() async {
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    final dpr = views.isNotEmpty ? views.first.devicePixelRatio : 3.0;
+    final icon = await ChaserDotIcon.bitmap(dpr);
+    if (!mounted) return;
+    setState(() => _chaserDot = icon);
+  }
+
+  void _startChaser() {
+    _chaserTimer?.cancel();
+    if (_route.length < 3) return;
+    _chaser = PolylineChaser(_route);
+    // ~20fps, full loop every ~22.5s.
+    _chaserTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
+      if (!mounted) return;
+      setState(() => _chaserPhase = (_chaserPhase + 0.00222) % 1.0);
+    });
+  }
+
+  /// Frame the whole route in the 240 px-tall map header so a long
+  /// trail isn't shown as a tiny squiggle next to the centre pin. Runs
+  /// once the map controller is available and the route has loaded.
+  void _fitRouteBounds() {
+    final ctrl = _mapController;
+    if (ctrl == null || _route.isEmpty) return;
+    if (_route.length == 1) {
+      ctrl.animateCamera(CameraUpdate.newLatLngZoom(_route.first, 16));
+      return;
+    }
+    double minLat = _route.first.latitude, maxLat = _route.first.latitude;
+    double minLng = _route.first.longitude, maxLng = _route.first.longitude;
+    for (final p in _route) {
+      if (p.latitude < minLat) minLat = p.latitude;
+      if (p.latitude > maxLat) maxLat = p.latitude;
+      if (p.longitude < minLng) minLng = p.longitude;
+      if (p.longitude > maxLng) maxLng = p.longitude;
+    }
+    ctrl.animateCamera(
+      CameraUpdate.newLatLngBounds(
+        LatLngBounds(
+          southwest: LatLng(minLat, minLng),
+          northeast: LatLng(maxLat, maxLng),
+        ),
+        40,
+      ),
+    );
   }
 
   Future<void> _loadPoints() async {
@@ -66,10 +148,30 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
       _route = route;
       _isLoading = false;
     });
+    _startChaser();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _fitRouteBounds());
+    _loadCheckpoints();
 
     // Only geocode if location not already stored in DB
     if (_locationName == null || _locationName!.isEmpty) {
       _fetchLocationName();
+    }
+  }
+
+  /// Load this user's checkpoints for the current trail. Failures are
+  /// swallowed silently — checkpoints are an optional overlay, so a
+  /// network blip should not block the rest of the detail page.
+  Future<void> _loadCheckpoints() async {
+    final id = int.tryParse(trail.id ?? '');
+    if (id == null) return;
+    final resp = await TraxApi.getTrailCheckpoints(id);
+    if (!mounted) return;
+    if (resp.isSuccess() && resp.data is List) {
+      final cps = (resp.data as List)
+          .map((e) => UserCheckpoint.fromJson(e as Map<String, dynamic>))
+          .toList()
+        ..sort((a, b) => a.sequenceIndex.compareTo(b.sequenceIndex));
+      setState(() => _checkpoints = cps);
     }
   }
 
@@ -192,11 +294,10 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
       ),
       body: Column(
         children: [
-          // Fixed-height map header — using a SliverAppBar/FlexibleSpaceBar
-          // here would let the surrounding scroll view steal the map's
-          // pan/pinch gestures.
+          // Compact map header so the info panel below fits on a single
+          // screen on common phones (≈ 800 px height) without scrolling.
           SizedBox(
-            height: 240,
+            height: 180,
             width: double.infinity,
             child: _route.isNotEmpty
                 ? GoogleMap(
@@ -208,7 +309,7 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
                       Polyline(
                         polylineId: const PolylineId('trail'),
                         points: _route,
-                        color: AppColors.primary,
+                        color: AppColors.primary.withValues(alpha: 0.9),
                         width: 4,
                       ),
                     },
@@ -224,10 +325,37 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
                           position: _route.last,
                           icon: StartEndMarkerIcons.finish,
                         ),
+                      // Per-user checkpoint pins (numbered orange circles).
+                      ...CpMarkerIcons.buildMarkers(
+                        context,
+                        {
+                          for (final cp in _checkpoints)
+                            cp.sequenceIndex: LatLng(cp.latitude, cp.longitude),
+                        },
+                        onWarmed: () { if (mounted) setState(() {}); },
+                      ),
+                      if (_chaserDot != null && (_chaser?.canRender ?? false))
+                        Marker(
+                          markerId: const MarkerId('trail_chaser'),
+                          position: _chaser!.headAt(_chaserPhase),
+                          icon: _chaserDot!,
+                          anchor: const Offset(0.5, 0.5),
+                          flat: true,
+                          zIndex: 6,
+                        ),
                     },
                     myLocationEnabled: false,
                     zoomControlsEnabled: false,
                     gestureRecognizers: kMapGestureRecognizers,
+                    onMapCreated: (c) {
+                      _mapController = c;
+                      // Trail points may already be loaded by the time the
+                      // GoogleMap is ready; fit now so the whole route is
+                      // framed inside the 240 px header instead of being
+                      // shown at the initial fixed zoom-14.
+                      WidgetsBinding.instance
+                          .addPostFrameCallback((_) => _fitRouteBounds());
+                    },
                   )
                 : Container(
                     color: AppColors.background,
@@ -239,24 +367,26 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
           Expanded(
             child: SingleChildScrollView(
               padding: EdgeInsets.fromLTRB(
-                  16, 16, 16, 16 + MediaQuery.of(context).padding.bottom),
+                  12, 12, 12, 12 + MediaQuery.of(context).padding.bottom),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildTrailInfo(),
-                  const SizedBox(height: 16),
-                  _buildLocationInfo(),
-                  if (_isOwner) ...[
-                    const SizedBox(height: 16),
-                    _buildVisibilityToggle(),
-                  ],
+                  _buildHeaderStrip(),
+                  const SizedBox(height: 10),
+                  _buildStatsStrip(),
+                  const SizedBox(height: 10),
+                  _buildLocationStrip(),
+                  const SizedBox(height: 10),
+                  _buildCheckpointsStrip(),
                   if (isLap) ...[
-                    const SizedBox(height: 16),
-                    _buildStartLapTimerButton(),
+                    const SizedBox(height: 12),
+                    _buildLapActionButtons(),
                   ],
-                  const SizedBox(height: 16),
-                  _buildStatsGrid(),
-                  SizedBox(height: MediaQuery.of(context).padding.bottom + 16),
+                  if (_isOwner) ...[
+                    const SizedBox(height: 10),
+                    _buildVisibilityStrip(),
+                  ],
+                  SizedBox(height: MediaQuery.of(context).padding.bottom + 8),
                 ],
               ),
             ),
@@ -414,6 +544,78 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
     );
   }
 
+  /// "My Checkpoints" card. Shows how many CPs the user has placed on
+  /// this trail (0–4) and a Configure button that opens the shared
+  /// TrailCheckpointsPage via [MapRouter]. On return we reload the
+  /// checkpoints so the map markers and the count refresh.
+  Widget _buildCheckpointsCard() {
+    final id = int.tryParse(trail.id ?? '');
+    if (id == null) return const SizedBox.shrink();
+    final count = _checkpoints.length;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 8,
+              offset: const Offset(0, 2)),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: AppColors.warning.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(Icons.flag, color: AppColors.warning, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('My Checkpoints',
+                    style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textPrimary)),
+                const SizedBox(height: 2),
+                Text('$count / 4 placed along this trail',
+                    style: const TextStyle(
+                        fontSize: 11, color: AppColors.textSecondary)),
+              ],
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              await MapRouter.openTrailCheckpoints(
+                context,
+                trailId: id,
+                trailName: trail.name,
+                trailStartLat: trail.startLatitude,
+                trailStartLng: trail.startLongitude,
+              );
+              if (!mounted) return;
+              await _loadCheckpoints();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            ),
+            child: Text(count == 0 ? 'Configure' : 'Edit'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildVisibilityToggle() {
     return Container(
       padding: const EdgeInsets.all(14),
@@ -470,22 +672,99 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
   }
 
   Widget _buildStartLapTimerButton() {
+    // Kept as a private helper for any caller that still needs the
+    // legacy single-button variant; the new layout uses
+    // [_buildLapActionButtons] with three equal buttons instead.
     return SizedBox(
       width: double.infinity,
-      height: 52,
+      height: 46,
       child: ElevatedButton.icon(
         onPressed: _onStartLapTimer,
-        icon: const Icon(Icons.timer, size: 22),
+        icon: const Icon(Icons.timer, size: 20),
         label: const Text(
           'Start Lap Timer',
-          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
         ),
         style: ElevatedButton.styleFrom(
           backgroundColor: AppColors.primary,
           foregroundColor: Colors.white,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
       ),
+    );
+  }
+
+  /// Three independent entry points for a lap-type trail. The user
+  /// asked for them to be visually equal (no primary/secondary), so all
+  /// three share the same filled style.
+  Widget _buildLapActionButtons() {
+    return Row(
+      children: [
+        Expanded(child: _lapActionBtn(
+          icon: Icons.timer,
+          label: 'Lap Timer',
+          onTap: _onStartLapTimer,
+        )),
+        const SizedBox(width: 8),
+        Expanded(child: _lapActionBtn(
+          icon: Icons.groups_outlined,
+          label: 'Host Laps',
+          onTap: _onHostLaps,
+        )),
+        const SizedBox(width: 8),
+        Expanded(child: _lapActionBtn(
+          icon: Icons.emoji_events_outlined,
+          label: 'Host Race',
+          onTap: _onHostRace,
+        )),
+      ],
+    );
+  }
+
+  Widget _lapActionBtn({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return SizedBox(
+      height: 64,
+      child: ElevatedButton(
+        onPressed: onTap,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.primary,
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 22),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _onHostLaps() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => HostLapsPage(initialTrail: trail)),
+    );
+  }
+
+  Future<void> _onHostRace() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => HostRacePage(initialTrail: trail)),
     );
   }
 
@@ -791,6 +1070,238 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  // ───── Compact one-screen strips (replace the older cards) ─────────
+
+  /// Trail name + type/difficulty chips + owner/creator chip. Single
+  /// rounded card, one or two visual lines.
+  Widget _buildHeaderStrip() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: _stripDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 36, height: 36,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(Icons.terrain, color: AppColors.primary, size: 20),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  trail.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.w700,
+                      color: AppColors.textPrimary),
+                ),
+              ),
+              _chip(
+                label: _isOwner ? 'Owner' : 'Guest',
+                color: _isOwner ? AppColors.primary : AppColors.textSecondary,
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Icon(_typeIcon(), size: 13, color: AppColors.textSecondary),
+              const SizedBox(width: 4),
+              Text(_typeLabel(),
+                  style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+              const SizedBox(width: 10),
+              _chip(label: _difficultyLabel(), color: _difficultyColor()),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  _isOwner
+                      ? 'Created by you'
+                      : 'by ${trail.creatorName ?? "unknown"}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Distance / Elevation / Elev Δ / Points — single horizontal row.
+  Widget _buildStatsStrip() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+      decoration: _stripDecoration(),
+      child: Row(
+        children: [
+          _miniStat(Icons.straighten, 'Distance',
+              '${(trail.distance ?? 0).toStringAsFixed(2)} km'),
+          _miniStat(Icons.trending_up, 'Elev',
+              '${(trail.elevation ?? 0).toStringAsFixed(0)} m'),
+          _miniStat(Icons.swap_vert, 'Elev Δ',
+              trail.elevationDiff != null
+                  ? '${trail.elevationDiff!.toStringAsFixed(0)} m'
+                  : '—'),
+          _miniStat(Icons.pin_drop, 'Points', '${_route.length}'),
+        ],
+      ),
+    );
+  }
+
+  Widget _miniStat(IconData icon, String label, String value) {
+    return Expanded(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 18, color: AppColors.primary),
+          const SizedBox(height: 2),
+          Text(value,
+              style: const TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary)),
+          Text(label,
+              style: const TextStyle(fontSize: 10, color: AppColors.textSecondary)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLocationStrip() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: _stripDecoration(),
+      child: Row(
+        children: [
+          const Icon(Icons.location_on, color: AppColors.primary, size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              _locationName ?? 'Loading…',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                  fontSize: 13, color: AppColors.textPrimary,
+                  fontWeight: FontWeight.w500),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCheckpointsStrip() {
+    final id = int.tryParse(trail.id ?? '');
+    if (id == null) return const SizedBox.shrink();
+    final count = _checkpoints.length;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: _stripDecoration(),
+      child: Row(
+        children: [
+          const Icon(Icons.flag, color: AppColors.warning, size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'My Checkpoints  ·  $count / 4',
+              style: const TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary),
+            ),
+          ),
+          TextButton(
+            onPressed: () async {
+              await MapRouter.openTrailCheckpoints(
+                context,
+                trailId: id,
+                trailName: trail.name,
+                trailStartLat: trail.startLatitude,
+                trailStartLng: trail.startLongitude,
+              );
+              if (!mounted) return;
+              await _loadCheckpoints();
+            },
+            style: TextButton.styleFrom(
+              foregroundColor: AppColors.primary,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            ),
+            child: Text(count == 0 ? 'Configure' : 'Edit'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVisibilityStrip() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: _stripDecoration(),
+      child: Row(
+        children: [
+          Icon(
+            _isPublic ? Icons.public : Icons.lock_outline,
+            color: _isPublic ? AppColors.primary : AppColors.textSecondary,
+            size: 20,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              _isPublic
+                  ? 'Public · Anyone can search this trail'
+                  : 'Private · Only you can see this trail',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                  fontSize: 12, color: AppColors.textPrimary,
+                  fontWeight: FontWeight.w500),
+            ),
+          ),
+          Transform.scale(
+            scale: 0.85,
+            child: Switch(
+              value: _isPublic,
+              onChanged: _toggleVisibility,
+              activeColor: AppColors.primary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  BoxDecoration _stripDecoration() => BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 6,
+              offset: const Offset(0, 2)),
+        ],
+      );
+
+  Widget _chip({required String label, required Color color}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+            fontSize: 10, fontWeight: FontWeight.w700, color: color),
       ),
     );
   }

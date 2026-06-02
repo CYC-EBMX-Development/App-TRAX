@@ -212,8 +212,8 @@ class _FreeRidePageState extends State<FreeRidePage> {
                     Polyline(
                       polylineId: const PolylineId('route'),
                       points: route,
-                      color: AppColors.primary,
-                      width: 4,
+                      color: Colors.red,
+                      width: 6,
                     ),
                   }
                 : {},

@@ -62,9 +62,18 @@ class _RaceTrackingPageAmapState extends State<RaceTrackingPageAmap>
   int? _selectedBikeId;
 
   static const List<Color> _riderColors = [
-    Color(0xFF4285F4), Color(0xFFEA4335), Color(0xFF34A853),
-    Color(0xFFFBBC04), Color(0xFF9C27B0), Color(0xFFFF6D00),
-    Color(0xFF00BCD4), Color(0xFFE91E63),
+    // Curated multi-rider palette. Trail polyline uses AppColors.primary
+    // (orange #FFB800), so orange/yellow hues are intentionally excluded
+    // from this list per Req 3 (多人 tracking colors must not match
+    // the trail color).
+    Color(0xFF4285F4), // blue
+    Color(0xFFEA4335), // red
+    Color(0xFF34A853), // green
+    Color(0xFF9C27B0), // purple
+    Color(0xFF00BCD4), // cyan
+    Color(0xFFE91E63), // pink
+    Color(0xFF3F51B5), // indigo
+    Color(0xFF8BC34A), // light green
   ];
 
   @override
@@ -585,6 +594,12 @@ class _RaceTrackingPageAmapState extends State<RaceTrackingPageAmap>
               ],
             ),
           ),
+          if (_race?.isInProgress == true && riders.isNotEmpty)
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 64,
+              right: 12,
+              child: _buildLiveRankingOverlay(riders),
+            ),
           Positioned(
             bottom: 0,
             left: 0,
@@ -602,15 +617,18 @@ class _RaceTrackingPageAmapState extends State<RaceTrackingPageAmap>
       polylines.add(amap_map.Polyline(
         points: AmapAdapter.toAmapList(_trailRoute),
         color: AppColors.primary.withValues(alpha: 0.35),
-        width: 7,
+        width: 14,
       ));
     }
+    // Req 4: AMap Polyline has no zIndex; rely on Set insertion order so
+    // later riders are drawn on top of earlier ones, and the trail (added
+    // first) stays at the lowest visual layer.
     for (final r in riders) {
       if (r.route.length >= 2) {
         polylines.add(amap_map.Polyline(
           points: AmapAdapter.toAmapList(r.route),
           color: _colorFor(r.userId),
-          width: 6,
+          width: 8,
         ));
       }
     }
@@ -1574,6 +1592,119 @@ class _RaceTrackingPageAmapState extends State<RaceTrackingPageAmap>
             height: 40,
             child:
                 Icon(icon, size: 20, color: AppColors.textPrimary)),
+      ),
+    );
+  }
+
+  // ── Live ranking overlay (top-right of map) ───────────
+  /// Builds a compact floating leaderboard showing the top 5 riders
+  /// ranked by laps completed, then by distance, then by speed.
+  /// Updates in real time as [_liveData] is polled.
+  List<RiderLiveInfo> _rankedRiders(List<RiderLiveInfo> riders) {
+    final list = [...riders];
+    list.sort((a, b) {
+      final aFin = a.status == 'finished' && a.finishRank != null;
+      final bFin = b.status == 'finished' && b.finishRank != null;
+      if (aFin && bFin) return a.finishRank!.compareTo(b.finishRank!);
+      if (aFin) return -1;
+      if (bFin) return 1;
+      if (a.status == 'dnf' && b.status != 'dnf') return 1;
+      if (b.status == 'dnf' && a.status != 'dnf') return -1;
+      final lapCmp = b.completedLaps.compareTo(a.completedLaps);
+      if (lapCmp != 0) return lapCmp;
+      final distCmp = b.distanceKm.compareTo(a.distanceKm);
+      if (distCmp != 0) return distCmp;
+      return b.speed.compareTo(a.speed);
+    });
+    return list;
+  }
+
+  Widget _buildLiveRankingOverlay(List<RiderLiveInfo> riders) {
+    final ranked = _rankedRiders(riders).take(5).toList();
+    return Container(
+      width: 168,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.95),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.12), blurRadius: 8),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: const [
+              Icon(Icons.leaderboard, size: 14, color: AppColors.primary),
+              SizedBox(width: 4),
+              Text('Live Ranking',
+                  style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textPrimary)),
+            ],
+          ),
+          const SizedBox(height: 6),
+          for (int i = 0; i < ranked.length; i++)
+            _buildRankRow(i + 1, ranked[i]),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRankRow(int rank, RiderLiveInfo r) {
+    final isMe = r.userId == _myId;
+    final rankColor = rank == 1
+        ? const Color(0xFFFFC107)
+        : rank == 2
+            ? const Color(0xFFB0BEC5)
+            : rank == 3
+                ? const Color(0xFFCD7F32)
+                : AppColors.textSecondary;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 16,
+            child: Text('$rank',
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    color: rankColor)),
+          ),
+          Container(
+            width: 8,
+            height: 8,
+            margin: const EdgeInsets.only(right: 4),
+            decoration: BoxDecoration(
+              color: _colorFor(r.userId),
+              shape: BoxShape.circle,
+            ),
+          ),
+          Expanded(
+            child: Text(
+              r.userName ?? 'Rider',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: isMe ? FontWeight.w800 : FontWeight.w600,
+                color: isMe ? AppColors.primary : AppColors.textPrimary,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(width: 4),
+          Text(
+            r.status == 'dnf' ? 'DNF' : 'L${r.completedLaps}',
+            style: const TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textSecondary),
+          ),
+        ],
       ),
     );
   }

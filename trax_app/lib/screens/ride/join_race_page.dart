@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../common/network/trax_api.dart';
 import '../../common/utils/trax_storage_util.dart';
 import '../../common/widgets/bike_picker.dart';
+import '../../common/widgets/map_router.dart';
 import '../../common/widgets/trax_refresh_button.dart';
 import '../../models/race.dart';
 import '../../theme/app_theme.dart';
@@ -78,9 +79,7 @@ class _JoinRacePageState extends State<JoinRacePage> {
     if (!mounted) return;
     if (resp.isSuccess() && resp.data != null) {
       final race = Race.fromJson(resp.data as Map<String, dynamic>);
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => RaceDetailPage(raceId: race.id)),
-      );
+      await MapRouter.openEventByStatus(context, race);
     } else {
       showTraxSnackBar(context, resp.message, isError: true);
     }
@@ -195,9 +194,9 @@ class _JoinRacePageState extends State<JoinRacePage> {
           _load();
           return;
         }
-        Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => RaceDetailPage(raceId: race.id)),
-        ).then((_) => _load());
+        Navigator.of(context); // ensure context still mounted
+        await MapRouter.openEventByStatus(context, race);
+        _load();
       },
       child: Container(
         margin: const EdgeInsets.only(bottom: 10),

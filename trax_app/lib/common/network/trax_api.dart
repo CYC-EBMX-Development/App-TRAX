@@ -196,6 +196,32 @@ class TraxApi {
     });
   }
 
+  /// Change the password for the currently authenticated user. The
+  /// server verifies [oldPassword] against the stored bcrypt hash
+  /// before applying [newPassword]. The user identity is taken from
+  /// the bearer token attached by AppTokenInterceptor — no email
+  /// needs to be passed in the body.
+  static Future<AppResponse> changePassword({required String oldPassword, required String newPassword}) {
+    return put(
+      '${TraxUrl.users}/me/password',
+      data: {'oldPassword': oldPassword, 'newPassword': newPassword},
+      headers: _TraxContentType.jsonHeaders,
+      showLoading: true,
+    );
+  }
+
+  /// Step 1 of the in-app Change Password wizard: verify that the
+  /// supplied [password] matches the current account's password. The
+  /// server returns success without modifying anything; client uses the
+  /// outcome to gate moving to step 2 (entering the new password).
+  static Future<AppResponse> verifyPassword({required String password}) {
+    return post(
+      '${TraxUrl.users}/me/verify-password',
+      data: {'oldPassword': password},
+      headers: _TraxContentType.jsonHeaders,
+    );
+  }
+
   static Future<AppResponse> loginWithGoogle(String token) {
     final headers = {'Authorization': 'Bearer $token'};
     headers.addAll(_TraxContentType.jsonHeaders);
@@ -404,6 +430,24 @@ class TraxApi {
 
   static Future<AppResponse> getTrails() =>
       get(TraxUrl.trails, showLoading: false);
+
+  static Future<AppResponse> getNearbyTrails({
+    required double lat,
+    required double lng,
+    double radius = 20000,
+    int limit = 50,
+  }) =>
+      get(
+        TraxUrl.trails,
+        path: '/nearby',
+        queryParameters: {
+          'lat': lat,
+          'lng': lng,
+          'radius': radius,
+          'limit': limit,
+        },
+        showLoading: false,
+      );
 
   static Future<AppResponse> createTrail(Map<String, dynamic> data) =>
       post(TraxUrl.trails, path: '/create', data: data,

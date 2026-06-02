@@ -4,6 +4,7 @@ import '../../common/global/global_user_info.dart';
 import '../../common/network/trax_api.dart';
 import '../../common/services/app_update_service.dart';
 import '../../common/services/map_provider.dart';
+import '../../common/widgets/app_update_prompt.dart';
 import '../../common/widgets/trax_refresh_button.dart';
 import '../../models/ebike.dart';
 import '../../models/race.dart';
@@ -73,10 +74,15 @@ class HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _loadAll();
-    // Fire-and-forget OTA check; success flips
-    // AppUpdateService.instance.hasUpdateAvailable, which the avatar
-    // badge below listens to.
+    // Run the OTA check eagerly so the avatar badge reflects the real
+    // server state from the moment the Home screen renders, instead of
+    // only after the user taps the avatar. We also auto-prompt the user
+    // once per process / per new build via AppUpdatePrompt.maybeShowOnHome.
     AppUpdateService.instance.checkForUpdate();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      AppUpdatePrompt.maybeShowOnHome(context);
+    });
   }
 
   Future<void> _loadAll() async {
@@ -229,8 +235,12 @@ class HomeScreenState extends State<HomeScreen> {
           padding: const EdgeInsets.only(left: 12),
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTap: () {
-              AppUpdateService.instance.markUpdateSeen();
+            onTap: () async {
+              // Persist that the user has acknowledged the pending
+              // update so the badge stays off after they return from
+              // Profile, until the server publishes a newer release.
+              await AppUpdateService.instance.markUpdateSeen();
+              if (!context.mounted) return;
               Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const ProfileScreen()),
               );

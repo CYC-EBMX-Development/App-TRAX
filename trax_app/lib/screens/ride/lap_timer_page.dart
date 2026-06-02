@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+import 'dart:async';
 import '../../common/utils/map_gesture_recognizers.dart';
 import '../../common/utils/cp_marker_icons.dart';
 import '../../common/utils/avatar_marker_icons.dart';
@@ -423,14 +424,16 @@ class _LapTimerPageState extends State<LapTimerPage> {
                           polylineId: const PolylineId('trail'),
                           points: _trailRoute,
                           color: AppColors.primary.withValues(alpha: 0.5),
-                          width: 5,
+                          width: 6,
+                          zIndex: 0,
                         ),
                       if (_svc.route.length >= 2)
                         Polyline(
                           polylineId: const PolylineId('ride'),
                           points: _svc.route,
-                          color: AppColors.primary,
-                          width: 4,
+                          color: Colors.red,
+                          width: 6,
+                          zIndex: 1,
                         ),
                     },
                     markers: {

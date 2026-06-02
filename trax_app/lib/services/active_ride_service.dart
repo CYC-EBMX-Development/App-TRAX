@@ -76,6 +76,12 @@ class ActiveRideService extends ChangeNotifier {
   StreamSubscription<Position>? _geoSub;
   final List<RidePoint> _pendingPoints = [];
 
+  // Force-phone-GPS flag. When true, [_startTimers] always uses the
+  // phone GPS path even if the bike has a TRAX module configured.
+  // Lap Timer sessions set this so the rider's actual movement drives
+  // the map / lap detection, instead of the backend module simulator.
+  bool _forcePhoneGps = false;
+
   // Getters
   int? get rideId => _rideId;
   String get rideStatus => _rideStatus;
@@ -120,6 +126,10 @@ class ActiveRideService extends ChangeNotifier {
   }
 
   /// Start a Lap Timer ride bound to a Lap-type trail.
+  ///
+  /// Always uses the phone's real GPS for tracking, even if the bike
+  /// has a TRAX module configured. The backend module simulator is not
+  /// started for Lap Timer rides.
   Future<bool> startLapTimer({
     required EBike bike,
     required int trailId,
@@ -127,7 +137,8 @@ class ActiveRideService extends ChangeNotifier {
     required int targetLaps,
   }) async {
     _bike = bike;
-    _mode = _hasModule ? 'with_module' : 'without_module';
+    _forcePhoneGps = true;
+    _mode = 'without_module';
     final bikeId = int.tryParse(bike.id) ?? 0;
     final resp = await TraxApi.startRide(
       bicycleId: bikeId,
@@ -164,7 +175,7 @@ class ActiveRideService extends ChangeNotifier {
 
     _statsTimer = Timer.periodic(const Duration(seconds: 3), (_) => _pollStats());
 
-    if (_hasModule) {
+    if (_hasModule && !_forcePhoneGps) {
       _startModuleTracking();
     } else {
       _startPhoneGps();
@@ -421,6 +432,7 @@ class ActiveRideService extends ChangeNotifier {
     _source = null;
     _stats = null;
     _telemetry = null;
+    _forcePhoneGps = false;
     route.clear();
     displayDuration = 0;
     notifyListeners();

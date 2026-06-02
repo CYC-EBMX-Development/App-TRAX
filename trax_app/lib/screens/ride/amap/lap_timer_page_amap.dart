@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:amap_flutter_base/amap_flutter_base.dart' as amap;
@@ -378,13 +379,13 @@ class _LapTimerPageAmapState extends State<LapTimerPageAmap> {
                         Polyline(
                           points: AmapAdapter.toAmapList(_trailRoute),
                           color: AppColors.primary.withValues(alpha: 0.5),
-                          width: 7,
+                          width: 14,
                         ),
                       if (_svc.route.length >= 2)
                         Polyline(
                           points: AmapAdapter.toAmapList(_svc.route),
-                          color: AppColors.primary,
-                          width: 8,
+                          color: Colors.red,
+                          width: 14,
                         ),
                     },
                     markers: {

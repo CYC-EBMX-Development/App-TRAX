@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -51,6 +53,37 @@ class MapProviderService {
   static bool get useAmap => current == MapProvider.amap;
   static MapProviderMode get mode => _mode;
 
+  /// GPS-derived regional provider hint (ignores user override mode).
+  /// Useful when we must ensure a map SDK is locally usable (e.g. observer
+  /// watch mode in mainland China).
+  static MapProvider get localRegionProvider => _auto;
+
+  static bool get isMainlandRegion => _auto == MapProvider.amap;
+
+  /// Resolve provider for a concrete client role.
+  ///
+  /// For rider/host flows, we keep the desired provider as-is.
+  /// For observer flows, we force a mainland-safe fallback so Watch mode can
+  /// still render when Google Maps is unreachable on the viewer device.
+  static MapProvider resolveForClient({
+    required bool isObserver,
+    MapProvider? preferredProvider,
+  }) {
+    final desired = preferredProvider ?? current;
+    if (!isObserver) return desired;
+    if (desired == MapProvider.google && isMainlandRegion) {
+      return MapProvider.amap;
+    }
+    return desired;
+  }
+
+  static bool observerFallbackApplied({MapProvider? preferredProvider}) {
+    final desired = preferredProvider ?? current;
+    return desired == MapProvider.google &&
+        resolveForClient(isObserver: true, preferredProvider: desired) ==
+            MapProvider.amap;
+  }
+
   /// Notifies listeners when [current] changes. UI code can rebuild against
   /// this to reflect provider switches across app sessions.
   static final ValueNotifier<MapProvider> providerNotifier =
@@ -63,6 +96,16 @@ class MapProviderService {
     final raw = prefs.getString(_prefsKey);
     if (raw == 'amap') {
       _auto = MapProvider.amap;
+    } else if (raw == null) {
+      // First-launch hint: no GPS yet, no cached choice. Bias the
+      // default towards AMap when the device locale + timezone look
+      // Chinese mainland — otherwise testers in CN see Google Maps
+      // render first, then a jarring ~10s swap after the GPS fix
+      // arrives. This is only a default; a real GPS fix later via
+      // [applyForCoordinate] still wins.
+      if (_looksLikeChinaByDeviceLocale()) {
+        _auto = MapProvider.amap;
+      }
     }
     final modeRaw = prefs.getString(_modePrefsKey);
     switch (modeRaw) {
@@ -80,6 +123,22 @@ class MapProviderService {
     // the future via [_firstResolveFuture] so navigation entry points can
     // wait briefly (see [ensureResolved]).
     _firstResolveFuture = _silentResolveLoop();
+  }
+
+  /// Heuristic: device locale starts with `zh` AND timezone offset is
+  /// UTC+8. Matches mainland China, HK, Macau, Taiwan, Singapore (close
+  /// enough — worst case Singapore users see AMap initially then flip to
+  /// Google once GPS resolves, which is the SAME behaviour CN users had
+  /// before this hint, just inverted).
+  static bool _looksLikeChinaByDeviceLocale() {
+    try {
+      final locale = Platform.localeName.toLowerCase();
+      final isChineseLocale = locale.startsWith('zh');
+      final isUtc8 = DateTime.now().timeZoneOffset == const Duration(hours: 8);
+      return isChineseLocale && isUtc8;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// Run a sequence of background location fixes until one succeeds.

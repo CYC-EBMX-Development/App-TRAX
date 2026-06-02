@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import '../../common/network/trax_api.dart';
 import '../../common/utils/trax_storage_util.dart';
 import '../../common/widgets/bike_picker.dart';
+import '../../common/widgets/map_router.dart';
 import '../../common/widgets/trax_refresh_button.dart';
 import '../../models/race.dart';
 import '../../models/trail.dart';
@@ -14,7 +15,8 @@ import 'trail_picker_page.dart';
 import 'package:trax_app/common/widgets/page_code_badge.dart';
 
 class HostRacePage extends StatefulWidget {
-  const HostRacePage({super.key});
+  final Trail? initialTrail;
+  const HostRacePage({super.key, this.initialTrail});
 
   @override
   State<HostRacePage> createState() => _HostRacePageState();
@@ -75,8 +77,19 @@ class _HostRacePageState extends State<HostRacePage> {
           .map((e) => Trail.fromJson(e as Map<String, dynamic>))
           .where((t) => t.type == 'lap')
           .toList();
+      final initial = widget.initialTrail;
+      Trail? initialPicked;
+      if (initial != null) {
+        for (final t in list) {
+          if (t.id == initial.id) {
+            initialPicked = t;
+            break;
+          }
+        }
+      }
       setState(() {
         _trails = list;
+        if (initialPicked != null) _selectedTrail = initialPicked;
         _loading = false;
       });
     } else {
@@ -162,9 +175,7 @@ class _HostRacePageState extends State<HostRacePage> {
     if (!mounted) return;
     if (resp.isSuccess() && resp.data != null) {
       final race = Race.fromJson(resp.data as Map<String, dynamic>);
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => RaceDetailPage(raceId: race.id)),
-      );
+      await MapRouter.openEventByStatus(context, race);
     } else {
       showTraxSnackBar(context, resp.message, isError: true);
     }

@@ -28,20 +28,21 @@ CODE="${1:-}"
 NOTES="${2:-}"
 
 if [[ -z "$CODE" ]]; then
-  # Auto: pick the highest-numbered IPA in build/dist/ matching trax-test-YYMMDD-NN.ipa
-  LATEST_IPA=$(ls -1 "$APP_ROOT"/build/dist/trax-test-*-??.ipa 2>/dev/null \
-    | sort | tail -1)
+  # Auto: pick highest sequence for today's naming rule trax-test-YYMMDD-N.ipa
+  LATEST_IPA=$(ls -1 "$APP_ROOT"/build/dist/trax-test-*.ipa 2>/dev/null \
+    | sed -nE 's#(.*/trax-test-[0-9]{6}-([0-9]+)\.ipa)$#\2\t\1#p' \
+    | sort -t $'\t' -k1,1n | tail -1 | cut -f2)
   if [[ -z "$LATEST_IPA" ]]; then
     echo "!! No IPA found and no code argument given."
-    echo "   Usage: $0 <YYMMDD-NN> [release notes]"
+    echo "   Usage: $0 <YYMMDD-N> [release notes]"
     exit 1
   fi
-  CODE=$(basename "$LATEST_IPA" | sed -E 's/^trax-test-([0-9]{6}-[0-9]{2})\.ipa$/\1/')
+  CODE=$(basename "$LATEST_IPA" | sed -E 's/^trax-test-([0-9]{6}-[0-9]+)\.ipa$/\1/')
   echo "==> auto-detected from $(basename "$LATEST_IPA"): $CODE"
 fi
 
-if ! [[ "$CODE" =~ ^[0-9]{6}-[0-9]{2}$ ]]; then
-  echo "!! invalid code '$CODE' (expected YYMMDD-NN, e.g. 260514-07)"
+if ! [[ "$CODE" =~ ^[0-9]{6}-[0-9]+$ ]]; then
+  echo "!! invalid code '$CODE' (expected YYMMDD-N, e.g. 260514-07)"
   exit 1
 fi
 

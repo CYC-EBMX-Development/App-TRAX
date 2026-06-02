@@ -29,6 +29,19 @@ public class TrailController {
         return ResponseEntity.ok(ApiResponse.success(dtos));
     }
 
+    @GetMapping("/nearby")
+    public ResponseEntity<ApiResponse<List<TrailDto>>> getNearbyTrails(
+            Authentication auth,
+            @RequestParam double lat,
+            @RequestParam double lng,
+            @RequestParam(defaultValue = "20000") double radius,
+            @RequestParam(defaultValue = "50") int limit) {
+        User user = (User) auth.getPrincipal();
+        List<TrailDto> dtos = trailService.getVisibleNearby(
+                user.getId(), lat, lng, radius, limit);
+        return ResponseEntity.ok(ApiResponse.success(dtos));
+    }
+
     @GetMapping("/{id}")
     public ResponseEntity<ApiResponse<TrailDto>> getTrailById(@PathVariable Long id) {
         return ResponseEntity.ok(ApiResponse.success(

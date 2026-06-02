@@ -190,7 +190,12 @@ class _RaceDetailPageState extends State<RaceDetailPage> {
     final resp = await TraxApi.startRaceEvent(widget.raceId);
     if (!mounted) return;
     if (resp.isSuccess()) {
-      MapRouter.openRaceTracking(context, raceId: widget.raceId, replace: true);
+      MapRouter.openRaceTracking(
+        context,
+        raceId: widget.raceId,
+        isObserver: _race?.isObserver ?? false,
+        replace: true,
+      );
     } else {
       showTraxSnackBar(context, resp.message, isError: true);
     }
@@ -355,6 +360,7 @@ class _RaceDetailPageState extends State<RaceDetailPage> {
       backgroundColor: AppColors.background,
       appBar: AppBar(
         title: traxTitle(_race?.name ?? 'Race Detail'),
+        actions: _buildAppBarActions(),
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
@@ -362,6 +368,44 @@ class _RaceDetailPageState extends State<RaceDetailPage> {
               ? const Center(child: Text('Race not found'))
               : _buildBody(),
     );
+  }
+
+  /// Compact top-right actions for the Race Detail AppBar. Mirrors the
+  /// Ride Detail layout (circular Play + Delete buttons) so Replay Race
+  /// and Delete My Race Record live in the same spot across screens.
+  List<Widget> _buildAppBarActions() {
+    final race = _race;
+    if (race == null || !race.isCompleted) return const [];
+    final canReplay = _liveData != null && _liveData!.riders.isNotEmpty;
+    final canDelete = _myRideId != null;
+    return [
+      if (canReplay)
+        Container(
+          margin: const EdgeInsets.only(right: 4),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.9),
+            shape: BoxShape.circle,
+          ),
+          child: IconButton(
+            icon: const Icon(Icons.play_circle_outline, color: AppColors.primary),
+            tooltip: 'Replay Race',
+            onPressed: _onReplayRace,
+          ),
+        ),
+      if (canDelete)
+        Container(
+          margin: const EdgeInsets.only(right: 4),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.9),
+            shape: BoxShape.circle,
+          ),
+          child: IconButton(
+            icon: const Icon(Icons.delete_outline, color: AppColors.error),
+            tooltip: 'Delete My Race Record',
+            onPressed: _onDeleteMyRecord,
+          ),
+        ),
+    ];
   }
 
   Widget _buildBody() {
@@ -2561,7 +2605,12 @@ class _RaceDetailPageState extends State<RaceDetailPage> {
   }
 
   void _onEnterTracking() {
-    MapRouter.openRaceTracking(context, raceId: widget.raceId, replace: true);
+    MapRouter.openRaceTracking(
+      context,
+      raceId: widget.raceId,
+      isObserver: _race?.isObserver ?? false,
+      replace: true,
+    );
   }
 
   void _onReplayRace() async {
@@ -2580,6 +2629,7 @@ class _RaceDetailPageState extends State<RaceDetailPage> {
       riders: _liveData!.riders,
       isLaps: _race?.isLaps ?? false,
       trailId: _race?.trailId,
+      isObserver: _race?.isObserver ?? false,
     );
   }
 
@@ -2622,18 +2672,9 @@ class _RaceDetailPageState extends State<RaceDetailPage> {
             padding: const EdgeInsets.only(top: 10),
             child: _actionBtn('Watch', Icons.visibility, AppColors.primary, _onWatchRace),
           ),
-        if (race.isCompleted && _liveData != null && _liveData!.riders.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 10),
-            child: _actionBtn('Replay Race', Icons.replay, AppColors.primary, _onReplayRace),
-          ),
-        if (race.isCompleted && _myRideId != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 10),
-            child: _actionBtn(
-                'Delete My Race Record', Icons.delete_outline, AppColors.error,
-                _onDeleteMyRecord, outlined: true),
-          ),
+        // Replay Race + Delete My Record buttons are surfaced in the
+        // top-right of the AppBar (see _buildAppBarActions) when the
+        // race is completed, mirroring the Ride Detail page layout.
       ],
     );
   }

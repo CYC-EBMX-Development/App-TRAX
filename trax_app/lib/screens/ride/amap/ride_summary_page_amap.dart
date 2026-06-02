@@ -141,7 +141,7 @@ class _RideSummaryPageAmapState extends State<RideSummaryPageAmap> {
       privacyStatement: AmapAdapter.privacy(),
       apiKey: AmapAdapter.apiKey(),
       initialCameraPosition: AmapAdapter.initialCamera(_route, zoom: 14),
-      polylines: {AmapAdapter.routePolyline(_route)},
+      polylines: {AmapAdapter.routePolyline(_route, color: Colors.red)},
       markers: AmapAdapter.startFinishMarkers(_route),
       scrollGesturesEnabled: true,
       zoomGesturesEnabled: true,
