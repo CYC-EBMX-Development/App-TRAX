@@ -31,17 +31,16 @@ subprojects {
                     if (pkg != null) namespace = pkg
                 }
             }
-        }
-        project.afterEvaluate {
-            extensions.findByName("android")?.let { ext ->
-                try {
-                    val current = ext.javaClass.getMethod("getCompileSdkVersion").invoke(ext) as? String
-                    val n = current?.removePrefix("android-")?.toIntOrNull() ?: 0
-                    if (n < 34) {
-                        ext.javaClass.getMethod("setCompileSdkVersion", String::class.java)
-                            .invoke(ext, "android-34")
-                    }
-                } catch (_: Throwable) { }
+            if ((compileSdk ?: 0) < 34) {
+                compileSdk = 34
+            }
+            // Align Java with Kotlin (JVM 17). The Flutter / Kotlin Gradle
+            // plugins push Kotlin to 17 in this project; without matching
+            // Java, AGP fails ':install_plugin' etc. with "Inconsistent
+            // JVM-target compatibility".
+            compileOptions {
+                sourceCompatibility = JavaVersion.VERSION_17
+                targetCompatibility = JavaVersion.VERSION_17
             }
         }
     }
@@ -49,6 +48,23 @@ subprojects {
 
 subprojects {
     project.evaluationDependsOn(":app")
+}
+
+// Force UTF-8 source encoding for all Java compilation. Some legacy plugins
+// (e.g. amap_flutter_map) ship UTF-8 source files with Chinese comments;
+// without this, javac falls back to the system default (GBK on zh-CN
+// Windows) and fails with "illegal character" errors.
+allprojects {
+    tasks.withType<JavaCompile>().configureEach {
+        options.encoding = "UTF-8"
+        sourceCompatibility = JavaVersion.VERSION_17.toString()
+        targetCompatibility = JavaVersion.VERSION_17.toString()
+    }
+    tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
+    }
 }
 
 tasks.register<Delete>("clean") {

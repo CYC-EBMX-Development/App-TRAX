@@ -4,6 +4,10 @@
 <dict>
 	<key>AMAP_IOS_SDK_KEY</key>
 	<string>$(AMAP_IOS_SDK_KEY)</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>TRAX needs Bluetooth to scan and connect to TRA-X modules.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>TRAX needs Bluetooth to scan and connect to TRA-X modules.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
