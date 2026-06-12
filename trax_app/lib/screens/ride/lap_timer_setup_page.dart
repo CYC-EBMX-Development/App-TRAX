@@ -3,8 +3,9 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:geolocator/geolocator.dart';
+import '../../common/services/location_service.dart';
 
+import '../../common/utils/location_signal_gate.dart';
 import '../../common/utils/map_gesture_recognizers.dart';
 import '../../common/utils/start_end_marker_icons.dart';
 import '../../common/utils/trail_thumbnail.dart';
@@ -13,8 +14,12 @@ import '../../common/widgets/page_code_badge.dart';
 import '../../models/ebike.dart';
 import '../../models/trail.dart';
 import '../../models/user_checkpoint.dart';
+import '../../services/active_ride_service.dart';
+import '../../common/utils/map_styles.dart';
 import '../../theme/app_theme.dart';
 import '../../common/widgets/map_router.dart';
+import '../../common/widgets/my_location_fab.dart';
+import '../../common/widgets/satellite_badge.dart';
 
 /// Lap Timer Setup
 ///
@@ -49,6 +54,24 @@ class LapTimerSetupPage extends StatefulWidget {
 }
 
 class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
+  final _svc = ActiveRideService.instance;
+  bool get _hasModule =>
+      (widget.selectedBike.traxSerialNumber ?? '').isNotEmpty;
+
+  // Bottom sheet controller — lets the pinned handle resize the sheet.
+  final DraggableScrollableController _sheetCtl =
+      DraggableScrollableController();
+  double _sheetMinSize = 0.10;
+  double _sheetMaxSize = 0.60;
+  // Live sheet height in logical px (updated by _sheetCtl listener).
+  // Drives GoogleMap bottom padding so the visible area above the sheet
+  // stays in sync as the user drags / snaps.
+  double _sheetSizePx = 0;
+  // Sheet extent when the most recent finger-down started; used to bias
+  // the manual snap so a small downward drag anywhere on the body
+  // collapses the sheet.
+  double _dragStartExtent = 0;
+
   // ── Data ──────────────────────────────────────────────────
   List<Trail> _trails = [];
   bool _isLoadingTrails = true;
@@ -80,10 +103,6 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
   // (0..1) so they can be drawn as ticks on the slider.
   List<double> _checkpointTicks = const [];
 
-  // Custom start location picker
-  bool _isPickingStart = false;
-  LatLng? _pickedStart;
-
   // Cache of numbered checkpoint marker bitmaps, keyed by sequence index.
   final Map<int, BitmapDescriptor> _cpMarkerCache = {};
 
@@ -93,12 +112,76 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
   @override
   void initState() {
     super.initState();
+    // Keep map bottom-padding in sync with the sheet size so the trail
+    // stays framed in the visible area above the sheet.
+    _sheetCtl.addListener(_onSheetSizeChanged);
     _bootstrap();
+    // Pre-Start preview: subscribe to module telemetry so the
+    // my-location button can show the bike's live position before the
+    // rider taps Start. Pre-Start frames are NOT persisted (see
+    // ActiveRideService._onModuleTelemetryJson).
+    if (_hasModule) {
+      _svc.previewModule(widget.selectedBike);
+    }
+  }
+
+  void _onSheetSizeChanged() {
+    if (!mounted || !_sheetCtl.isAttached) return;
+    final screenH = MediaQuery.of(context).size.height;
+    final px = _sheetCtl.size * screenH;
+    if ((px - _sheetSizePx).abs() < 6) return;
+    setState(() => _sheetSizePx = px);
+  }
+
+  /// Re-fit the trail (or recentre on user location) so it sits in the
+  /// visible area above the sheet. Called after a snap settles.
+  void _refitMapToSheet() {
+    if (!mounted || _mapController == null) return;
+    if (_trailRoute.isNotEmpty) {
+      _fitTrailBounds(_trailRoute);
+    } else if (_userLocation != null) {
+      _mapController!
+          .animateCamera(CameraUpdate.newLatLngZoom(_userLocation!, 15));
+    }
+  }
+
+  /// Manual snap-on-release with a downward-drag bias: any drag that
+  /// moved the sheet downward by more than a small threshold collapses,
+  /// any drag upward by the same threshold expands. This lets the user
+  /// collapse the sheet by dragging anywhere on the body (not just the
+  /// handle), without waiting until they've crossed the midpoint.
+  void _snapAfterDrag() {
+    if (!_sheetCtl.isAttached) return;
+    final cur = _sheetCtl.size;
+    final range = (_sheetMaxSize - _sheetMinSize).clamp(0.0001, 1.0);
+    final delta = cur - _dragStartExtent;
+    const threshold = 0.04; // ~30–40px of finger travel
+    double target;
+    if (delta < -threshold) {
+      target = _sheetMinSize;
+    } else if (delta > threshold) {
+      target = _sheetMaxSize;
+    } else {
+      // Tiny drag — snap to nearest.
+      target = ((cur - _sheetMinSize) / range) >= 0.5
+          ? _sheetMaxSize
+          : _sheetMinSize;
+    }
+    if ((cur - target).abs() < 0.005) return;
+    _sheetCtl.animateTo(target,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut);
+    Future.delayed(const Duration(milliseconds: 240), _refitMapToSheet);
   }
 
   @override
   void dispose() {
+    _sheetCtl.removeListener(_onSheetSizeChanged);
+    _sheetCtl.dispose();
     _mapController?.dispose();
+    // Tear down the pre-Start preview subscription if the rider left
+    // without starting a ride. No-op if a ride is already active.
+    _svc.stopPreview();
     super.dispose();
   }
 
@@ -134,24 +217,19 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
   }
 
   Future<void> _fetchUserLocation() async {
-    try {
-      var perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied) {
-        perm = await Geolocator.requestPermission();
-      }
-      if (perm == LocationPermission.deniedForever ||
-          perm == LocationPermission.denied) return;
-      final pos = await Geolocator.getCurrentPosition(
-        locationSettings:
-            const LocationSettings(accuracy: LocationAccuracy.high),
-      );
-      if (!mounted) return;
-      _userLocation = LatLng(pos.latitude, pos.longitude);
-      if (_mapReady && _selectedTrail == null) {
-        _mapController
-            ?.animateCamera(CameraUpdate.newLatLngZoom(_userLocation!, 15));
-      }
-    } catch (_) {}
+    // With a module bike, never auto-pan to phone GPS — the bike's own
+    // position is the source of truth and the user can tap My Location
+    // (which is module-gated) to recenter.
+    if (_hasModule) return;
+    // Dual-source fix (Geolocator + AMap, first wins) — works indoors in
+    // mainland China and never hangs on a satellite-only lock.
+    final fix = await LocationService.getFix();
+    if (!mounted || fix == null) return;
+    _userLocation = fix;
+    if (_mapReady && _selectedTrail == null) {
+      _mapController
+          ?.animateCamera(CameraUpdate.newLatLngZoom(_userLocation!, 15));
+    }
   }
 
   // ── Trail selection ───────────────────────────────────────
@@ -181,8 +259,6 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
       _trailPointCount = 0;
       _isLoadingRoute = true;
       _isPickingCheckpoint = false;
-      _isPickingStart = false;
-      _pickedStart = null;
       _checkpoints = [];
       _cpMarkerCache.clear();
     });
@@ -511,55 +587,65 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
     }
   }
 
-  // ── Start Location Picker ─────────────────────────────────
-  void _enterStartPickMode() {
-    if (_selectedTrail == null) return;
-    setState(() => _isPickingStart = true);
-  }
+  // ── My Location ───────────────────────────────────────────
+  /// Re-centers the map on the rider's current location.
+  ///
+  /// Mirrors the Free Ride behavior: for module bikes we require live
+  /// module telemetry — there is NO silent fallback to phone GPS,
+  /// because the rider needs to know the bike module has no signal
+  /// before starting the session. Phone-only bikes use phone GPS.
+  Future<void> _onMyLocationTap() async {
+    if (_hasModule) {
+      if (_svc.telemetry == null) {
+        if (!mounted) return;
+        _toast('Unable to get bike module signal', isError: true);
+        return;
+      }
+      if (_mapController != null) {
+        await _mapController!.animateCamera(
+            CameraUpdate.newLatLngZoom(_svc.currentPos, 16));
+      }
+      return;
+    }
 
-  Future<void> _confirmStartLocation() async {
-    if (_mapController == null) return;
-    final size = MediaQuery.of(context).size;
-    final mapH = (size.height * 0.45).clamp(280.0, 460.0);
-    final center = await _mapController!.getLatLng(
-      ScreenCoordinate(
-        x: (size.width / 2).round(),
-        y: (mapH / 2).round(),
-      ),
-    );
-    setState(() {
-      _pickedStart = center;
-      _isPickingStart = false;
-    });
-  }
-
-  void _cancelStartPick() {
-    setState(() => _isPickingStart = false);
+    // Phone-only path: dual-source fix (Geolocator + AMap, first wins).
+    final fix = await LocationService.getFix();
+    if (!mounted) return;
+    if (fix == null) {
+      _toast('Unable to get phone GPS signal', isError: true);
+      return;
+    }
+    setState(() => _userLocation = fix);
+    if (_mapController != null) {
+      await _mapController!
+          .animateCamera(CameraUpdate.newLatLngZoom(fix, 16));
+    }
   }
 
   // ── Start Session ─────────────────────────────────────────
-  void _onStartSession() {
+  Future<void> _onStartSession() async {
     if (_selectedTrail == null) return;
+    final ok = await LocationSignalGate.ensureSignalOrConfirm(
+      context: context,
+      bike: widget.selectedBike,
+    );
+    if (!ok || !mounted) return;
     MapRouter.openLapTimer(
       context,
       selectedBike: widget.selectedBike,
       trail: _selectedTrail!,
       targetLaps: _targetLaps,
-      startLocation: _pickedStart,
       autoStart: true,
       replace: true,
     );
   }
 
   // ── Helpers ───────────────────────────────────────────────
+  /// Top-of-screen banner matching the Free Ride / Trails snackbar
+  /// style — renders just below the topbar via the root overlay so
+  /// every page surfaces errors in the same spot.
   void _toast(String msg, {bool isError = false}) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg),
-        backgroundColor: isError ? AppColors.error : null,
-        duration: const Duration(seconds: 2),
-      ),
-    );
+    showTraxSnackBar(context, msg, isError: isError);
   }
 
   // ── Build ─────────────────────────────────────────────────
@@ -577,12 +663,23 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
   }
 
   // ───────────────────────────────────────────────────────────
-  // MAIN VIEW (Map top half + Bottom panel)
+  // MAIN VIEW (Full-screen map + DraggableScrollableSheet)
   // ───────────────────────────────────────────────────────────
   Widget _buildMainView() {
     final safeTop = MediaQuery.of(context).padding.top;
     final screenH = MediaQuery.of(context).size.height;
-    final mapH = (screenH * 0.45).clamp(280.0, 460.0);
+    final safeBottom = MediaQuery.of(context).padding.bottom;
+
+    // Sheet collapsed = handle + Start button + paddings.
+    final collapsedPx = 100.0 + safeBottom;
+    final minSize = (collapsedPx / screenH).clamp(0.10, 0.30);
+    // Expanded size estimated from current content so the card stops
+    // exactly at its content end (mirrors the Map-tab trail-card popup).
+    final expandedPx = _estimatedExpandedPx(safeBottom);
+    final maxSize = (expandedPx / screenH).clamp(minSize + 0.05, 0.92);
+    // Live sheet bottom-padding for the map. Falls back to expandedPx
+    // until the controller has reported its first size.
+    final mapBottomPx = _sheetSizePx > 0 ? _sheetSizePx : expandedPx;
 
     LatLng mapCenter;
     if (_trailRoute.isNotEmpty) {
@@ -596,62 +693,73 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
     return Stack(
       fit: StackFit.expand,
       children: [
-        // Map (top half)
-        Positioned(
-          top: 0, left: 0, right: 0,
-          height: mapH,
-          child: GoogleMap(
-            initialCameraPosition: CameraPosition(target: mapCenter, zoom: 15),
-            myLocationEnabled: true,
-            myLocationButtonEnabled: false,
-            zoomControlsEnabled: false,
-            gestureRecognizers: kMapGestureRecognizers,
-            polylines: {
-              if (_trailRoute.length >= 2)
-                Polyline(
-                  polylineId: const PolylineId('trail'),
-                  points: _trailRoute,
-                  color: AppColors.primary,
-                  width: 4,
-                ),
-            },
-            markers: {
-              if (_trailRoute.isNotEmpty)
-                Marker(
-                  markerId: const MarkerId('start'),
-                  position: _trailRoute.first,
-                  icon: StartEndMarkerIcons.start,
-                  infoWindow: const InfoWindow(title: 'Start / Finish'),
-                ),
-              for (final cp in _checkpoints)
-                Marker(
-                  markerId: MarkerId('cp_${cp.id}'),
-                  position: LatLng(cp.latitude, cp.longitude),
-                  icon: _cpIcon(cp.sequenceIndex),
-                  anchor: const Offset(0.5, 0.5),
-                  infoWindow:
-                      InfoWindow(title: 'Checkpoint ${cp.sequenceIndex}'),
-                ),
-              if (_pickedStart != null)
-                Marker(
-                  markerId: const MarkerId('picked_start'),
-                  position: _pickedStart!,
-                  icon: BitmapDescriptor.defaultMarkerWithHue(
-                      BitmapDescriptor.hueRed),
-                  infoWindow: const InfoWindow(title: 'Custom Start'),
-                ),
-            },
-            onMapCreated: (c) {
-              _mapController = c;
-              _mapReady = true;
-              if (_trailRoute.isNotEmpty) {
-                _fitTrailBounds(_trailRoute);
-              } else if (_userLocation != null) {
-                c.animateCamera(
-                    CameraUpdate.newLatLngZoom(_userLocation!, 15));
-              }
-            },
-          ),
+        // Full-screen map
+        GoogleMap(
+          initialCameraPosition: CameraPosition(target: mapCenter, zoom: 15),
+          // Hide native blue dot when bike has a TRAX module — location
+          // must come from the module, not the phone GPS. Matches AMap.
+          myLocationEnabled: !_hasModule,
+          myLocationButtonEnabled: false,
+          zoomControlsEnabled: false,
+          gestureRecognizers: kMapGestureRecognizers,
+          padding: EdgeInsets.only(bottom: mapBottomPx),
+          polylines: {
+            if (_trailRoute.length >= 2) ...[
+              Polyline(
+                polylineId: const PolylineId('trail_halo'),
+                points: _trailRoute,
+                color: MapStyles.trailHaloColor,
+                width: MapStyles.trailHaloWidth,
+              ),
+              Polyline(
+                polylineId: const PolylineId('trail'),
+                points: _trailRoute,
+                color: MapStyles.trailColor,
+                width: MapStyles.trailWidth,
+              ),
+            ],
+          },
+          markers: {
+            if (_trailRoute.isNotEmpty)
+              Marker(
+                markerId: const MarkerId('start'),
+                position: _trailRoute.first,
+                icon: StartEndMarkerIcons.start,
+                infoWindow: const InfoWindow(title: 'Start / Finish'),
+              ),
+            // Module bike → native blue dot is suppressed. Draw our own
+            // dot once the module has a fix so the rider sees where the
+            // bike is before picking a trail.
+            if (_hasModule && _svc.telemetry != null)
+              Marker(
+                markerId: const MarkerId('me_module'),
+                position: _svc.currentPos,
+                icon: BitmapDescriptor.defaultMarkerWithHue(
+                    BitmapDescriptor.hueAzure),
+                anchor: const Offset(0.5, 0.5),
+                infoWindow:
+                    const InfoWindow(title: 'My bike location'),
+              ),
+            for (final cp in _checkpoints)
+              Marker(
+                markerId: MarkerId('cp_${cp.id}'),
+                position: LatLng(cp.latitude, cp.longitude),
+                icon: _cpIcon(cp.sequenceIndex),
+                anchor: const Offset(0.5, 0.5),
+                infoWindow:
+                    InfoWindow(title: 'Checkpoint ${cp.sequenceIndex}'),
+              ),
+          },
+          onMapCreated: (c) {
+            _mapController = c;
+            _mapReady = true;
+            if (_trailRoute.isNotEmpty) {
+              _fitTrailBounds(_trailRoute);
+            } else if (_userLocation != null) {
+              c.animateCamera(
+                  CameraUpdate.newLatLngZoom(_userLocation!, 15));
+            }
+          },
         ),
 
         if (_isLoadingRoute)
@@ -670,157 +778,14 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
             ),
           ),
 
-        // Bottom panel (hidden while picking start so the map is fully visible)
-        if (!_isPickingStart)
-          Positioned(
-            left: 0, right: 0, top: mapH - 16, bottom: 0,
-            child: _buildBottomPanel(),
-          ),
-
-        // Centered pin overlay while picking start (within top-half map)
-        if (_isPickingStart)
-          Positioned(
-            left: 0, right: 0,
-            top: mapH / 2 - 36,
-            child: const IgnorePointer(
-              child: Center(
-                child: Icon(Icons.pin_drop,
-                    size: 44, color: AppColors.error),
-              ),
-            ),
-          ),
-
-        // Picking hint banner (just above the bottom of the map)
-        if (_isPickingStart)
-          Positioned(
-            left: 16, right: 16,
-            top: mapH - 56,
-            child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.12),
-                      blurRadius: 8),
-                ],
-              ),
-              child: const Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.pin_drop,
-                      size: 14, color: AppColors.error),
-                  SizedBox(width: 6),
-                  Text('Drag map, then tap ✓ to set start',
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textPrimary)),
-                ],
-              ),
-            ),
-          ),
-
-        // Bottom action bar while picking start
-        if (_isPickingStart)
-          Positioned(
-            left: 0, right: 0, bottom: 0,
-            child: Container(
-              decoration: const BoxDecoration(
-                color: AppColors.surface,
-                borderRadius:
-                    BorderRadius.vertical(top: Radius.circular(20)),
-                boxShadow: [
-                  BoxShadow(
-                      color: Colors.black12,
-                      blurRadius: 8, offset: Offset(0, -2)),
-                ],
-              ),
-              padding: EdgeInsets.fromLTRB(16, 14, 16,
-                  MediaQuery.of(context).padding.bottom + 14),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: _cancelStartPick,
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: AppColors.textSecondary,
-                        side: BorderSide(
-                            color: AppColors.textSecondary
-                                .withValues(alpha: 0.4)),
-                        padding:
-                            const EdgeInsets.symmetric(vertical: 12),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20)),
-                      ),
-                      child: const Text('Cancel'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    flex: 2,
-                    child: ElevatedButton.icon(
-                      onPressed: _confirmStartLocation,
-                      icon: const Icon(Icons.check,
-                          size: 18, color: Colors.white),
-                      label: const Text('Set Start',
-                          style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white)),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primary,
-                        padding:
-                            const EdgeInsets.symmetric(vertical: 12),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20)),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
         // Top bar
         Positioned(
           top: safeTop + 8, left: 12, right: 12,
           child: Row(
             children: [
-              _circleBtn(
-                  _isPickingStart ? Icons.close : Icons.arrow_back,
-                  _isPickingStart
-                      ? _cancelStartPick
-                      : () => Navigator.of(context).pop()),
+              _circleBtn(Icons.arrow_back,
+                  () => Navigator.of(context).pop()),
               const SizedBox(width: 8),
-              // On-map pick-start toggle (free-ride style)
-              if (_selectedTrail != null)
-                Material(
-                  color: _isPickingStart
-                      ? AppColors.primary
-                      : Colors.white,
-                  shape: const CircleBorder(),
-                  elevation: 2,
-                  child: InkWell(
-                    customBorder: const CircleBorder(),
-                    onTap: _isPickingStart
-                        ? _confirmStartLocation
-                        : _enterStartPickMode,
-                    child: SizedBox(
-                      width: 40, height: 40,
-                      child: Icon(
-                        _isPickingStart ? Icons.check : Icons.pin_drop,
-                        size: 20,
-                        color: _isPickingStart
-                            ? Colors.white
-                            : AppColors.textPrimary,
-                      ),
-                    ),
-                  ),
-                ),
-              if (_selectedTrail != null) const SizedBox(width: 8),
               Expanded(
                 child: Container(
                   padding: const EdgeInsets.symmetric(
@@ -834,22 +799,13 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
                           blurRadius: 6),
                     ],
                   ),
-                  child: Row(
+                  child: const Row(
                     children: [
-                      Icon(
-                          _isPickingStart
-                              ? Icons.pin_drop
-                              : Icons.timer,
-                          size: 18,
-                          color: AppColors.primary),
-                      const SizedBox(width: 6),
-                      Text(
-                          _isPickingStart
-                              ? 'Pick Start Location'
-                              : 'Lap Timer Setup',
-                          style: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600)),
+                      Icon(Icons.timer, size: 18, color: AppColors.primary),
+                      SizedBox(width: 6),
+                      Text('Lap Timer Setup',
+                          style: TextStyle(
+                              fontSize: 14, fontWeight: FontWeight.w600)),
                     ],
                   ),
                 ),
@@ -857,74 +813,213 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
             ],
           ),
         ),
+
+        // My-location FAB (just above the sheet — follows its current height)
+        Positioned(
+          right: 14,
+          bottom: mapBottomPx + 12,
+          child: MyLocationFab(onTap: _onMyLocationTap),
+        ),
+
+        // Live satellite count (module bikes only)
+        if (_hasModule)
+          Positioned(
+            top: safeTop + 56,
+            right: 12,
+            child: SatelliteBadge(count: _svc.telemetry?.satellites),
+          ),
+
+        // Bottom draggable sheet — handle pinned at top, content scrolls
+        // in the middle, Start button pinned at bottom (inside the sheet
+        // so its background stays opaque). Manual snap so a small
+        // downward drag anywhere on the body collapses it.
+        DraggableScrollableSheet(
+          controller: _sheetCtl,
+          initialChildSize: maxSize,
+          minChildSize: minSize,
+          maxChildSize: maxSize,
+          snap: false,
+          builder: (ctx, scrollController) {
+            _sheetMinSize = minSize;
+            _sheetMaxSize = maxSize;
+            return Listener(
+              behavior: HitTestBehavior.translucent,
+              onPointerDown: (_) {
+                if (_sheetCtl.isAttached) {
+                  _dragStartExtent = _sheetCtl.size;
+                }
+              },
+              onPointerUp: (_) => _snapAfterDrag(),
+              onPointerCancel: (_) => _snapAfterDrag(),
+              child: Container(
+                decoration: const BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius:
+                      BorderRadius.vertical(top: Radius.circular(20)),
+                  boxShadow: [
+                    BoxShadow(
+                        color: Colors.black12,
+                        blurRadius: 8, offset: Offset(0, -2)),
+                  ],
+                ),
+                child: _buildSheetBody(scrollController),
+              ),
+            );
+          },
+        ),
       ],
     );
   }
 
-  Widget _buildBottomPanel() {
-    return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        boxShadow: [
-          BoxShadow(color: Colors.black12, blurRadius: 8, offset: Offset(0, -2)),
-        ],
-      ),
-      padding: EdgeInsets.fromLTRB(
-          16, 14, 16, MediaQuery.of(context).padding.bottom + 12),
-      child: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Drag handle
-            Center(
+  /// Heuristic content height (in logical px) used to compute the sheet's
+  /// expanded snap point. Tuned to actual rendered heights so the card
+  /// stops right at the end of its content — no empty space below.
+  ///
+  /// Card layout (top → bottom): handle, content (trail/checkpoints/laps
+  /// OR pick-prompt), Start button.
+  double _estimatedExpandedPx(double safeBottom) {
+    // handle (10 top + 4 bar + 8 bottom = 22)
+    // + Start button area (14 top gap + 50 button + 12 bottom + safeBottom)
+    double h = 22 + 14 + 50 + 12 + safeBottom;
+    if (_isLoadingTrails) {
+      h += 80;
+    } else if (_selectedTrail == null) {
+      // pick-prompt card (~120) + gap (14) + select-trail button (48)
+      h += 182;
+    } else {
+      h += 140; // selected trail card
+      h += 14;
+      h += 150; // checkpoints section (header + chips wrap + add)
+      h += 14;
+      h += 56;  // target laps row
+    }
+    return h;
+  }
+
+  /// Body of the draggable bottom sheet.
+  ///
+  /// Layout: pinned handle at top → scrollable content (trail /
+  /// checkpoints / target laps) → pinned Start button at bottom.
+  /// The handle is draggable to resize the sheet and tap-to-toggle
+  /// between collapsed and expanded.
+  Widget _buildSheetBody(ScrollController scrollController) {
+    final safeBottom = MediaQuery.of(context).padding.bottom;
+    final screenH = MediaQuery.of(context).size.height;
+    return Column(
+      // Hug content height so there's no empty slack pushing the Start
+      // button away from the last section. The DSS extent is sized via
+      // `_estimatedExpandedPx` to match this column's intrinsic height,
+      // which keeps the sheet bottom flush with the button.
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Pinned drag handle — always visible. Drag to resize; tap to
+        // toggle between collapsed and expanded.
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () {
+            final target = (_sheetCtl.size > (_sheetMinSize + _sheetMaxSize) / 2)
+                ? _sheetMinSize
+                : _sheetMaxSize;
+            _sheetCtl.animateTo(target,
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeOut);
+            Future.delayed(const Duration(milliseconds: 240), _refitMapToSheet);
+          },
+          onVerticalDragUpdate: (d) {
+            final next = (_sheetCtl.size - d.delta.dy / screenH)
+                .clamp(_sheetMinSize, _sheetMaxSize);
+            _sheetCtl.jumpTo(next);
+          },
+          onVerticalDragEnd: (_) {
+            final mid = (_sheetMinSize + _sheetMaxSize) / 2;
+            _sheetCtl.animateTo(
+                _sheetCtl.size >= mid ? _sheetMaxSize : _sheetMinSize,
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeOut);
+            Future.delayed(const Duration(milliseconds: 240), _refitMapToSheet);
+          },
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.only(top: 10, bottom: 8),
+            color: AppColors.surface,
+            child: Center(
               child: Container(
                 width: 36, height: 4,
-                margin: const EdgeInsets.only(bottom: 12),
                 decoration: BoxDecoration(
                   color: AppColors.divider,
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
             ),
-
-            if (_isLoadingTrails)
-              const Center(
-                  child: Padding(
-                padding: EdgeInsets.all(24),
-                child: CircularProgressIndicator(color: AppColors.primary),
-              ))
-            else if (_selectedTrail == null)
-              _buildPickPrompt()
-            else ...[
-              _buildSelectedTrailCard(_selectedTrail!),
-              const SizedBox(height: 14),
-              _buildCheckpointsSection(),
-              const SizedBox(height: 14),
-              _buildTargetLapsRow(),
-              const SizedBox(height: 14),
-              SizedBox(
-                width: double.infinity,
-                height: 50,
-                child: ElevatedButton.icon(
-                  onPressed: _onStartSession,
-                  icon: const Icon(Icons.play_arrow, size: 22),
-                  label: Text('Start $_targetLaps-Lap Session',
-                      style: const TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w700)),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primary,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(25)),
-                  ),
-                ),
-              ),
-            ],
-          ],
+          ),
         ),
-      ),
+
+        // Scrollable content. Flexible so a tall content set scrolls
+        // when the sheet is collapsed, but hugs its intrinsic height
+        // when expanded (since the column is MainAxisSize.min).
+        Flexible(
+          child: SingleChildScrollView(
+            controller: scrollController,
+            physics: const ClampingScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_isLoadingTrails)
+                  const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(24),
+                      child: CircularProgressIndicator(
+                          color: AppColors.primary),
+                    ),
+                  )
+                else if (_selectedTrail == null)
+                  _buildPickPrompt()
+                else ...[
+                  _buildSelectedTrailCard(_selectedTrail!),
+                  const SizedBox(height: 14),
+                  _buildCheckpointsSection(),
+                  const SizedBox(height: 14),
+                  _buildTargetLapsRow(),
+                ],
+              ],
+            ),
+          ),
+        ),
+
+        // Pinned Start button. Top padding = 14 so the gap to Target Laps
+        // matches the inter-section spacing (trail → checkpoints → laps).
+        Padding(
+          padding: EdgeInsets.fromLTRB(16, 14, 16, safeBottom + 12),
+          child: SizedBox(
+            width: double.infinity,
+            height: 50,
+            child: ElevatedButton.icon(
+              onPressed: (_isLoadingTrails || _selectedTrail == null)
+                  ? null
+                  : _onStartSession,
+              icon: const Icon(Icons.play_arrow, size: 22),
+              label: Text(
+                _selectedTrail == null
+                    ? 'Select Trail to Start'
+                    : 'Start $_targetLaps-Lap Session',
+                style: const TextStyle(
+                    fontSize: 15, fontWeight: FontWeight.w700),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                disabledBackgroundColor:
+                    AppColors.primary.withValues(alpha: 0.4),
+                disabledForegroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(25)),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1229,18 +1324,26 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
       children: [
         GoogleMap(
           initialCameraPosition: CameraPosition(target: mapCenter, zoom: 16),
-          myLocationEnabled: true,
+          // Module bike → suppress phone blue dot. Matches AMap variant.
+          myLocationEnabled: !_hasModule,
           myLocationButtonEnabled: false,
           zoomControlsEnabled: false,
           gestureRecognizers: kMapGestureRecognizers,
           polylines: {
-            if (_trailRoute.length >= 2)
+            if (_trailRoute.length >= 2) ...[
+              Polyline(
+                polylineId: const PolylineId('trail_halo'),
+                points: _trailRoute,
+                color: MapStyles.trailHaloColor,
+                width: MapStyles.trailHaloWidth,
+              ),
               Polyline(
                 polylineId: const PolylineId('trail'),
                 points: _trailRoute,
-                color: AppColors.primary,
-                width: 4,
+                color: MapStyles.trailColor,
+                width: MapStyles.trailWidth,
               ),
+            ],
           },
           markers: {
             if (_trailRoute.isNotEmpty)
@@ -1248,6 +1351,18 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
                 markerId: const MarkerId('start'),
                 position: _trailRoute.first,
                 icon: StartEndMarkerIcons.start,
+              ),
+            // Module bike → native blue dot suppressed; draw a custom
+            // my-location marker once the module has a fix.
+            if (_hasModule && _svc.telemetry != null)
+              Marker(
+                markerId: const MarkerId('me_module'),
+                position: _svc.currentPos,
+                icon: BitmapDescriptor.defaultMarkerWithHue(
+                    BitmapDescriptor.hueAzure),
+                anchor: const Offset(0.5, 0.5),
+                infoWindow:
+                    const InfoWindow(title: 'My bike location'),
               ),
             for (final cp in _checkpoints)
               Marker(
@@ -1315,6 +1430,14 @@ class _LapTimerSetupPageState extends State<LapTimerSetupPage> {
             ],
           ),
         ),
+
+        // Live satellite count (module bikes only)
+        if (_hasModule)
+          Positioned(
+            top: safeTop + 56,
+            right: 12,
+            child: SatelliteBadge(count: _svc.telemetry?.satellites),
+          ),
 
         // Bottom action bar with slider
         Positioned(

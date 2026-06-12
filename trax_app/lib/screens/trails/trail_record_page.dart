@@ -4,13 +4,18 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../../common/services/map_service.dart';
-import '../../common/services/gps_interval_settings.dart';
 import '../../common/utils/start_end_marker_icons.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:wakelock_plus/wakelock_plus.dart';
+import '../../common/utils/keep_awake_mixin.dart';
+import '../../common/utils/map_styles.dart';
 import '../../theme/app_theme.dart';
+import '../../common/network/trax_api.dart';
+import '../../common/services/module_telemetry_ws_client.dart';
 import '../../common/widgets/map_router.dart';
+import '../../common/widgets/satellite_badge.dart';
+import '../../common/widgets/bike_picker.dart';
 import 'package:trax_app/common/widgets/page_code_badge.dart';
+import '../../models/module_telemetry.dart';
 import '../../widgets/map_search_box.dart';
 import 'trail_record_mode.dart';
 
@@ -25,7 +30,8 @@ class TrailRecordPage extends StatefulWidget {
   State<TrailRecordPage> createState() => _TrailRecordPageState();
 }
 
-class _TrailRecordPageState extends State<TrailRecordPage> {
+class _TrailRecordPageState extends State<TrailRecordPage>
+    with KeepAwakeMixin<TrailRecordPage> {
   GoogleMapController? _mapController;
   bool _mapReady = false;
   MapType _mapType = MapType.normal;
@@ -83,28 +89,58 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
   static const double _kHeadingRefMinMeters = 5.0;
 
   // ── Adaptive GPS sampling ────────────────────────────
-  // Default sampling cadence is 1 s; when the rider is approaching the
-  // start or end point (distance shrinking AND within
-  // [_kFastSampleRadiusM]) we drop to 100 ms to capture the lap boundary
-  // precisely. Once the rider crosses the boundary and the distance
-  // begins to grow again we return to 1 s.
-  // Base cadence is user-configurable via Profile → Settings
-  // (GpsIntervalSettings). The fast cadence (100 ms) only triggers when
-  // the rider is approaching a lap boundary.
-  int get _kBaseIntervalMs => GpsIntervalSettings.baseIntervalMs;
-  int get _kFastIntervalMs =>
-      GpsIntervalSettings.baseIntervalMs < 100 ? GpsIntervalSettings.baseIntervalMs : 100;
+  // Phone GPS base cadence is fixed at 1 s — iOS / Android both cap GPS
+  // delivery at the GNSS chip's native ~1 Hz, so a user-tunable interval
+  // was misleading and was removed (2026-06-11). The fast-cadence
+  // machinery is retained for the future TRAX module variable-rate
+  // firmware (the phone OS still caps delivery, so it's a no-op on the
+  // phone path until then).
+  static const int _kBaseIntervalMs = 1000;
+  static const int _kFastIntervalMs = 100;
   static const double _kFastSampleRadiusM = 10.0;
   Timer? _samplingPollTimer;
-  int _currentIntervalMs = GpsIntervalSettings.baseIntervalMs;
+  int _currentIntervalMs = _kBaseIntervalMs;
   double? _lastDistToStartM;
   double? _lastDistToEndM;
+
+  // ── GPS quality filters (off-road trail fidelity) ─────────
+  // Drop fixes with reported horizontal accuracy worse than this many
+  // metres — urban-canyon / tree-cover multi-path is what pulls the
+  // recorded line onto a nearby road. After 5 consecutive drops we
+  // accept the next one anyway so we never silently stop recording.
+  static const double _kMaxAccuracyM = 25.0;
+  static const int _kMaxConsecutiveAccuracyDrops = 5;
+  int _consecutiveAccuracyDrops = 0;
+  // Reject "teleport" fixes whose implied speed since the previous
+  // accepted fix exceeds this many km/h. Two jumps in a row override
+  // the filter (in case the rider really did move).
+  static const double _kMaxJumpKmh = 120.0;
+  int _consecutiveJumpDrops = 0;
+  // Ignore micro-jitter while stationary — keeps the polyline clean and
+  // avoids growing _route with hundreds of overlapping points.
+  static const double _kMinStepMeters = 1.5;
+  DateTime? _lastAcceptedFixAt;
+
+  // Bike selection + source switch (Trail Record / Lap Record only).
+  List<Map<String, dynamic>> _myBikes = [];
+  int? _selectedBikeId;
+  ModuleTelemetryWsClient? _moduleWs;
+  StreamSubscription<Map<String, dynamic>>? _moduleWsSub;
+  String? _moduleSerial;
+  // Last position reported by the bike module (live telemetry only).
+  // `_currentPos` may contain a stale phone-GPS seed from before the bike
+  // list loaded, so `_locateMe` must NOT trust it for module bikes.
+  LatLng? _moduleFixPos;
+  int? _moduleSatellites; // latest live satellite count from the module
 
   @override
   void initState() {
     super.initState();
-    // Keep the screen awake throughout the recording session.
-    WakelockPlus.enable();
+    // Screen stays awake throughout the recording session (KeepAwakeMixin),
+    // re-asserted on app resume so iOS can't drop it mid-session.
+    if (_modeUsesBikeSource) {
+      unawaited(_loadMyBikes());
+    }
     _initLocation();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -126,6 +162,9 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
   }
 
   Future<void> _initLocation() async {
+    // Module bike selected → do NOT seed phone GPS into _currentPos.
+    // Location source must follow the bike's TRAX module instead.
+    if (_modeUsesBikeSource && _selectedBikeHasModule) return;
     var perm = await Geolocator.checkPermission();
     if (perm == LocationPermission.denied) {
       perm = await Geolocator.requestPermission();
@@ -173,6 +212,115 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
     if (pos != null && _mapReady && _mapController != null) {
       _mapController!.animateCamera(CameraUpdate.newLatLng(pos));
     }
+  }
+
+  bool get _modeUsesBikeSource =>
+      widget.initialMode == TrailRecordLaunchMode.trailRecord ||
+      widget.initialMode == TrailRecordLaunchMode.lap;
+
+  Map<String, dynamic>? get _selectedBike {
+    final id = _selectedBikeId;
+    if (id == null) return null;
+    for (final b in _myBikes) {
+      if ((b['id'] as num?)?.toInt() == id) return b;
+    }
+    return null;
+  }
+
+  String? get _selectedBikeSerial {
+    final raw = _selectedBike?['traxSerialNumber'] as String?;
+    if (raw == null || raw.isEmpty) return null;
+    return raw;
+  }
+
+  bool get _selectedBikeHasModule => _selectedBikeSerial != null;
+
+  String get _activeSourceLabel =>
+      _selectedBikeHasModule ? 'Bike Module' : 'Phone GPS';
+
+  Future<void> _loadMyBikes() async {
+    final resp = await TraxApi.getUserBikes();
+    if (!mounted || !resp.isSuccess()) return;
+    final list = (resp.data as List?)
+            ?.map((e) => e as Map<String, dynamic>)
+            .toList() ??
+        const <Map<String, dynamic>>[];
+    setState(() {
+      _myBikes = list;
+      final stillValid = _selectedBikeId != null &&
+          list.any((b) => (b['id'] as num?)?.toInt() == _selectedBikeId);
+      if (!stillValid) {
+        _selectedBikeId = list.isNotEmpty ? (list.first['id'] as num).toInt() : null;
+      }
+    });
+    if (_status == 'recording') {
+      _ensureModuleSubscription();
+    } else {
+      // Pre-Start: still subscribe so the my-location button works and
+      // shows "signal" as soon as the module pushes a frame. Frames are
+      // NOT persisted into _route until _status flips to 'recording'
+      // (gated inside _onModuleFrame).
+      _ensureModuleSubscription();
+    }
+  }
+
+  void _onBikeSelected(int? bikeId) {
+    if (bikeId == null) return;
+    setState(() {
+      _selectedBikeId = bikeId;
+      _errorMessage = null;
+    });
+    // Always (re)subscribe — pre-Start preview is allowed; persistence
+    // is gated separately inside _onModuleFrame.
+    _ensureModuleSubscription();
+  }
+
+  void _stopModuleSubscription() {
+    _moduleWsSub?.cancel();
+    _moduleWsSub = null;
+    _moduleWs?.dispose();
+    _moduleWs = null;
+    _moduleSerial = null;
+    _moduleFixPos = null;
+  }
+
+  void _ensureModuleSubscription() {
+    final serial = _selectedBikeSerial;
+    if (serial == _moduleSerial && _moduleWs != null) return;
+    _stopModuleSubscription();
+    if (serial == null || !_selectedBikeHasModule) {
+      return;
+    }
+    final client = ModuleTelemetryWsClient(serialNo: serial);
+    _moduleWs = client;
+    _moduleSerial = serial;
+    _moduleWsSub = client.stream.listen(_onModuleFrame);
+    unawaited(client.connect());
+  }
+
+  void _onModuleFrame(Map<String, dynamic> json) {
+    if (!mounted) return;
+    ModuleTelemetry t;
+    try {
+      t = ModuleTelemetry.fromJson(json);
+    } catch (_) {
+      return;
+    }
+    final lat = t.latitude;
+    final lng = t.longitude;
+    if (lat == 0 && lng == 0) return;
+    // Always refresh the latest fix — used by _locateMe regardless of
+    // recording state.
+    _moduleFixPos = LatLng(lat, lng);
+    if (mounted) setState(() => _moduleSatellites = t.satellites);
+    // Persist into the recorded route ONLY while actively recording.
+    if (_status != 'recording') return;
+    final ts = DateTime.tryParse(t.timestamp ?? '') ?? DateTime.now();
+    _appendRecordedPoint(
+      latlng: LatLng(lat, lng),
+      altitude: 0,
+      timestamp: ts,
+    );
   }
 
   // ── Location Picker ───────────────────────────────────────
@@ -223,19 +371,38 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
     _durationTimer?.cancel();
     _mockTimer?.cancel();
     _samplingPollTimer?.cancel();
+    _moduleWsSub?.cancel();
+    _moduleWs?.dispose();
     _mapController?.dispose();
-    // Release the wake-lock when leaving the page.
-    WakelockPlus.disable();
     super.dispose();
   }
 
   void _locateMe() {
+    if (_modeUsesBikeSource && _selectedBikeHasModule) {
+      // Only trust live module telemetry — never fall back to the phone GPS
+      // seed when the active source is the bike module.
+      final fix = _moduleFixPos;
+      if (fix == null) {
+        showTraxSnackBar(context, 'Unable to get bike module signal', isError: true);
+        return;
+      }
+      if (_mapReady && _mapController != null) {
+        _mapController!.animateCamera(CameraUpdate.newLatLng(fix));
+      }
+      return;
+    }
     _initLocation();
   }
 
   // ── Recording Controls ─────────────────────────────────
 
   void _onStart() {
+    if (_modeUsesBikeSource && _selectedBikeId == null) {
+      setState(() {
+        _errorMessage = 'Please select a bike before recording.';
+      });
+      return;
+    }
     setState(() {
       _status = 'recording';
       _errorMessage = null;
@@ -245,6 +412,9 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
     _durationSeconds = 0;
     _route.clear();
     _points.clear();
+    _consecutiveAccuracyDrops = 0;
+    _consecutiveJumpDrops = 0;
+    _lastAcceptedFixAt = null;
     // Reset lap-mode state every time recording starts so a previous
     // attempt can't poison the next.
     _lapStart = null;
@@ -261,36 +431,88 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
     _currentIntervalMs = _kBaseIntervalMs;
     _lastDistToStartM = null;
     _lastDistToEndM = null;
-    _geoSub = Geolocator.getPositionStream(
-      locationSettings: _buildLocationSettings(_kBaseIntervalMs),
-    ).listen((pos) {
-      final latlng = LatLng(pos.latitude, pos.longitude);
-      // Capture the previous sample BEFORE we mutate _points so we can
-      // run the segment-vs-finish-line crossing check below.
-      final prev = _points.isNotEmpty ? _points.last : null;
-      setState(() {
-        _currentPos = latlng;
-        _route.add(latlng);
-        _points.add(_RecordedPoint(
-          latitude: pos.latitude,
-          longitude: pos.longitude,
-          altitude: pos.altitude,
-          timestamp: DateTime.now(),
-        ));
-      });
-      _animateToCurrentPos();
-      _maybeAdjustSamplingRate(latlng);
-      if (_isLapRecordingMode) {
-        _lapModeOnNewPoint(prev, _points.last);
-      }
-    });
+    if (_modeUsesBikeSource && _selectedBikeHasModule) {
+      _ensureModuleSubscription();
+    } else {
+      _geoSub = Geolocator.getPositionStream(
+        locationSettings: _buildLocationSettings(_kBaseIntervalMs),
+      ).listen(_onPhoneGpsFix);
+    }
     // Every second re-evaluate the sampling rate even if no fix has come
     // through (e.g. user is stationary near the start point).
     _samplingPollTimer?.cancel();
     _samplingPollTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (_status != 'recording') return;
+      if (_modeUsesBikeSource && _selectedBikeHasModule) return;
       _maybeAdjustSamplingRate(_safeCurrentPos);
     });
+  }
+
+  void _onPhoneGpsFix(Position pos) {
+    if (!_acceptGpsFix(pos)) return;
+    _appendRecordedPoint(
+      latlng: LatLng(pos.latitude, pos.longitude),
+      altitude: pos.altitude,
+      timestamp: DateTime.now(),
+    );
+    _maybeAdjustSamplingRate(LatLng(pos.latitude, pos.longitude));
+  }
+
+  /// Drop low-quality / implausible GPS fixes before they are appended
+  /// to the recorded route. Returns true when the fix should be kept.
+  bool _acceptGpsFix(Position pos) {
+    if (pos.accuracy.isFinite && pos.accuracy > _kMaxAccuracyM) {
+      if (_consecutiveAccuracyDrops < _kMaxConsecutiveAccuracyDrops) {
+        _consecutiveAccuracyDrops++;
+        return false;
+      }
+    }
+    _consecutiveAccuracyDrops = 0;
+
+    if (_route.isNotEmpty && _lastAcceptedFixAt != null) {
+      final last = _route.last;
+      final dM = Geolocator.distanceBetween(
+          last.latitude, last.longitude, pos.latitude, pos.longitude);
+      final dtMs =
+          DateTime.now().difference(_lastAcceptedFixAt!).inMilliseconds;
+      if (dtMs > 0) {
+        final implKmh = (dM / dtMs) * 3600.0;
+        if (implKmh > _kMaxJumpKmh) {
+          if (_consecutiveJumpDrops < 2) {
+            _consecutiveJumpDrops++;
+            return false;
+          }
+        }
+      }
+      _consecutiveJumpDrops = 0;
+      if (dM < _kMinStepMeters) return false;
+    }
+
+    _lastAcceptedFixAt = DateTime.now();
+    return true;
+  }
+
+  void _appendRecordedPoint({
+    required LatLng latlng,
+    required double altitude,
+    required DateTime timestamp,
+  }) {
+    if (!mounted || _status != 'recording') return;
+    final prev = _points.isNotEmpty ? _points.last : null;
+    setState(() {
+      _currentPos = latlng;
+      _route.add(latlng);
+      _points.add(_RecordedPoint(
+        latitude: latlng.latitude,
+        longitude: latlng.longitude,
+        altitude: altitude,
+        timestamp: timestamp,
+      ));
+    });
+    _animateToCurrentPos();
+    if (_isLapRecordingMode) {
+      _lapModeOnNewPoint(prev, _points.last);
+    }
   }
 
   /// Build location settings for the active sampling rate.
@@ -311,13 +533,17 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
     }
     if (defaultTargetPlatform == TargetPlatform.iOS ||
         defaultTargetPlatform == TargetPlatform.macOS) {
+      // bestForNavigation = Core Location's strictest tier (sub-5 m in
+      // the open, anti multi-path); otherNavigation tells iOS this is a
+      // vehicle-class session so it won't throttle for power-saving the
+      // way ActivityType.fitness does.
       return AppleSettings(
-        accuracy: LocationAccuracy.high,
+        accuracy: LocationAccuracy.bestForNavigation,
         distanceFilter: 0,
         allowBackgroundLocationUpdates: true,
         showBackgroundLocationIndicator: true,
         pauseLocationUpdatesAutomatically: false,
-        activityType: ActivityType.fitness,
+        activityType: ActivityType.otherNavigation,
       );
     }
     return LocationSettings(
@@ -332,6 +558,7 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
   /// [_kFastSampleRadiusM]); once the rider crosses and starts moving
   /// away the cadence reverts to the 1 s base rate.
   void _maybeAdjustSamplingRate(LatLng pos) {
+    if (_modeUsesBikeSource && _selectedBikeHasModule) return;
     if (_status != 'recording' || _points.isEmpty) return;
     final start = _route.first;
     final end = _route.last;
@@ -365,25 +592,7 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
     _geoSub?.cancel();
     _geoSub = Geolocator.getPositionStream(
       locationSettings: _buildLocationSettings(desiredMs),
-    ).listen((p) {
-      final ll = LatLng(p.latitude, p.longitude);
-      final prev = _points.isNotEmpty ? _points.last : null;
-      setState(() {
-        _currentPos = ll;
-        _route.add(ll);
-        _points.add(_RecordedPoint(
-          latitude: p.latitude,
-          longitude: p.longitude,
-          altitude: p.altitude,
-          timestamp: DateTime.now(),
-        ));
-      });
-      _animateToCurrentPos();
-      _maybeAdjustSamplingRate(ll);
-      if (_isLapRecordingMode) {
-        _lapModeOnNewPoint(prev, _points.last);
-      }
-    });
+    ).listen(_onPhoneGpsFix);
   }
 
   void _onPause() {
@@ -408,6 +617,7 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
   Future<void> _onStop() async {
     _geoSub?.cancel();
     _geoSub = null;
+    _stopModuleSubscription();
     _mockTimer?.cancel();
     _mockTimer = null;
     _durationTimer?.cancel();
@@ -1037,7 +1247,9 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
             // Default map: flat 2D — disable 3D buildings and tilt entirely.
             // Satellite keeps tilt available for inspecting terrain.
             buildingsEnabled: _mapType != MapType.normal,
-            myLocationEnabled: true,
+            // Hide native blue dot when the bike has a TRAX module —
+            // location source must come from the module, not the phone.
+            myLocationEnabled: !(_modeUsesBikeSource && _selectedBikeHasModule),
             myLocationButtonEnabled: false,
             zoomControlsEnabled: false,
             // Lock map gestures while freehand-drawing the lap so finger
@@ -1050,13 +1262,20 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
             tiltGesturesEnabled: !_isDrawingLap && _mapType != MapType.normal,
             onTap: _isPickingLapPoints ? _onMapTapForLap : null,
             polylines: {
-              if (_route.length >= 2)
+              if (_route.length >= 2) ...[
+                Polyline(
+                  polylineId: const PolylineId('trail_halo'),
+                  points: _route,
+                  color: MapStyles.trailHaloColor,
+                  width: MapStyles.trailHaloWidth,
+                ),
                 Polyline(
                   polylineId: const PolylineId('trail'),
                   points: _route,
-                  color: AppColors.primary,
-                  width: 2,
+                  color: MapStyles.trailColor,
+                  width: MapStyles.trailWidth,
                 ),
+              ],
               if (_isDrawingLap && _drawnLapPoints.length >= 2)
                 Polyline(
                   polylineId: const PolylineId('drawn_lap'),
@@ -1159,15 +1378,16 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
             ),
           ),
 
-          // Address / place search box — collapsed pill that expands
-          // into a results dropdown when the user types.
+          // Address / place search box — inlined on the top bar next to
+          // the back button so it stays aligned with the back arrow.
           if (!_isPicking && !_isDrawingLap)
             Positioned(
-              top: safeTop + 60,
-              left: 0,
-              right: 0,
+              top: safeTop + 8,
+              left: 64,
+              right: 12,
               child: MapSearchBox(
                 near: _safeCurrentPos,
+                margin: EdgeInsets.zero,
                 onPick: (place) {
                   _mapController?.animateCamera(
                     CameraUpdate.newLatLngZoom(place.location, 16),
@@ -1261,6 +1481,14 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
               top: safeTop + 8,
               right: 16,
               child: _GpsChip(position: _safeCurrentPos),
+            ),
+
+          // Live satellite count (module bikes only)
+          if (!_isPicking && _pickedLocation == null && _selectedBikeHasModule)
+            Positioned(
+              top: safeTop + 56,
+              right: 16,
+              child: SatelliteBadge(count: _moduleSatellites),
             ),
 
           // Map layout switch (default/satellite) — bottom-left of map area
@@ -1599,14 +1827,36 @@ class _TrailRecordPageState extends State<TrailRecordPage> {
                 ? 'Pick Waypoints'
                 : ((_isLapRecordingMode ||
                         widget.initialMode == TrailRecordLaunchMode.lap)
-                    ? 'Record Lap'
-                    : 'Record Trail'),
+                    ? 'Lap Recording'
+                    : 'Free Recording'),
             style: const TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.w700,
                 color: AppColors.textPrimary),
           ),
           const SizedBox(height: 16),
+          if (_modeUsesBikeSource && !_isPickingLapPoints && _status == 'idle') ...[
+            BikePickerTile(
+              bikes: _myBikes,
+              selectedBikeId: _selectedBikeId,
+              allowNone: false,
+              label: 'Select bike for signal source',
+              onSelected: _onBikeSelected,
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Signal source: $_activeSourceLabel',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           if (_isLapRecordingMode && _status == 'recording')
             Padding(
               padding: const EdgeInsets.only(bottom: 12),

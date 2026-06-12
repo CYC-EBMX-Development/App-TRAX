@@ -19,6 +19,7 @@ import '../../screens/ride/race_detail_page.dart';
 import '../../screens/ride/race_tracking_page.dart';
 import '../../screens/ride/ride_summary_page.dart';
 import '../../screens/ride/ride_replay_page.dart';
+import '../../screens/ride/ride_analysis_page.dart';
 import '../../screens/ride/trail_checkpoints_page.dart';
 // AMap-variant pages (parallel CN code path).
 import '../../screens/trails/amap/trail_detail_page_amap.dart';
@@ -33,6 +34,7 @@ import '../../screens/ride/race_replay_page.dart';
 import '../../screens/ride/amap/race_tracking_page_amap.dart';
 import '../../screens/ride/amap/ride_summary_page_amap.dart';
 import '../../screens/ride/amap/ride_replay_page_amap.dart';
+import '../../screens/ride/amap/ride_analysis_page_amap.dart';
 import '../../screens/ride/amap/trail_checkpoints_page_amap.dart';
 
 /// Centralised entry point for opening any map-bearing page in the app.
@@ -255,6 +257,25 @@ class MapRouter {
         builder: (_) => provider == MapProvider.amap
             ? RideReplayPageAmap(points: points, rideName: rideName, laps: laps)
             : RideReplayPage(points: points, rideName: rideName, laps: laps),
+      ),
+    );
+  }
+
+  /// Open Ride Analysis. Provider chosen by the first point's region.
+  static Future<dynamic> openRideAnalysis(
+    BuildContext context, {
+    required List<Map<String, dynamic>> points,
+    required String rideName,
+  }) {
+    final origin = _firstCoord(points);
+    final provider = origin != null
+        ? MapRegion.providerForCoord(origin.latitude, origin.longitude)
+        : MapProviderService.current;
+    return Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => provider == MapProvider.amap
+            ? RideAnalysisPageAmap(points: points, rideName: rideName)
+            : RideAnalysisPage(points: points, rideName: rideName),
       ),
     );
   }

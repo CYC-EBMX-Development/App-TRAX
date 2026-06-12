@@ -7,6 +7,10 @@ class RaceLiveData {
   final String gameType;
   final int elapsedSeconds;
   final List<RiderLiveInfo> riders;
+  final int? timelineStartMs;
+  final int? timelineEndMs;
+  final int timelineResolutionMs;
+  final List<AlignedFrame> alignedFrames;
 
   RaceLiveData({
     required this.raceId,
@@ -14,6 +18,10 @@ class RaceLiveData {
     this.gameType = 'RACE',
     required this.elapsedSeconds,
     required this.riders,
+    this.timelineStartMs,
+    this.timelineEndMs,
+    this.timelineResolutionMs = 1000,
+    this.alignedFrames = const [],
   });
 
   factory RaceLiveData.fromJson(Map<String, dynamic> json) {
@@ -22,6 +30,15 @@ class RaceLiveData {
       raceStatus: json['raceStatus'] ?? 'waiting',
       gameType: (json['gameType'] as String?)?.toUpperCase() ?? 'RACE',
       elapsedSeconds: (json['elapsedSeconds'] as num?)?.toInt() ?? 0,
+        timelineStartMs: (json['timelineStartMs'] as num?)?.toInt(),
+        timelineEndMs: (json['timelineEndMs'] as num?)?.toInt(),
+        timelineResolutionMs:
+          (json['timelineResolutionMs'] as num?)?.toInt() ?? 1000,
+        alignedFrames: json['alignedFrames'] != null
+          ? (json['alignedFrames'] as List)
+            .map((e) => AlignedFrame.fromJson(e as Map<String, dynamic>))
+            .toList()
+          : const [],
       riders: json['riders'] != null
           ? (json['riders'] as List)
               .map((e) => RiderLiveInfo.fromJson(e as Map<String, dynamic>))
@@ -45,6 +62,7 @@ class RiderLiveInfo {
   final int durationSeconds;
   final int completedLaps;
   final int? bestLapSeconds;
+  final int? lastCapturedAtMs;
   final List<RideLap> laps;
   final List<LatLng> route;
   final int? bicycleId;
@@ -65,6 +83,7 @@ class RiderLiveInfo {
     this.durationSeconds = 0,
     this.completedLaps = 0,
     this.bestLapSeconds,
+    this.lastCapturedAtMs,
     this.laps = const [],
     this.route = const [],
     this.bicycleId,
@@ -87,6 +106,7 @@ class RiderLiveInfo {
       durationSeconds: (json['durationSeconds'] as num?)?.toInt() ?? 0,
       completedLaps: (json['completedLaps'] as num?)?.toInt() ?? 0,
       bestLapSeconds: (json['bestLapSeconds'] as num?)?.toInt(),
+        lastCapturedAtMs: (json['lastCapturedAtMs'] as num?)?.toInt(),
       laps: json['laps'] != null
           ? (json['laps'] as List)
               .map((e) => RideLap.fromJson(e as Map<String, dynamic>))
@@ -106,6 +126,47 @@ class RiderLiveInfo {
       bicycleId: (json['bicycleId'] as num?)?.toInt(),
       bicycleName: json['bicycleName'],
       bicycleImageUrl: json['bicycleImageUrl'],
+    );
+  }
+}
+
+class AlignedFrame {
+  final int capturedAtMs;
+  final List<AlignedRiderPoint> riders;
+
+  AlignedFrame({required this.capturedAtMs, this.riders = const []});
+
+  factory AlignedFrame.fromJson(Map<String, dynamic> json) {
+    return AlignedFrame(
+      capturedAtMs: (json['capturedAtMs'] as num).toInt(),
+      riders: json['riders'] != null
+          ? (json['riders'] as List)
+              .map((e) => AlignedRiderPoint.fromJson(e as Map<String, dynamic>))
+              .toList()
+          : const [],
+    );
+  }
+}
+
+class AlignedRiderPoint {
+  final int userId;
+  final double latitude;
+  final double longitude;
+  final double speed;
+
+  AlignedRiderPoint({
+    required this.userId,
+    required this.latitude,
+    required this.longitude,
+    this.speed = 0,
+  });
+
+  factory AlignedRiderPoint.fromJson(Map<String, dynamic> json) {
+    return AlignedRiderPoint(
+      userId: (json['userId'] as num).toInt(),
+      latitude: (json['latitude'] as num).toDouble(),
+      longitude: (json['longitude'] as num).toDouble(),
+      speed: (json['speed'] as num?)?.toDouble() ?? 0,
     );
   }
 }

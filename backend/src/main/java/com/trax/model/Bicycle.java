@@ -18,6 +18,13 @@ public class Bicycle {
     private String battery;
     private String other;
     private String imageUrl;
+
+    // Cached SN of the bound TRA-X module. NULL == unbound. Unique so that at
+    // most one bicycle (across the whole system, any user) can claim a given
+    // serial — defence-in-depth on top of the service-level isBound() guard.
+    // Most DBs (MySQL/Postgres/H2) treat NULL values as distinct in unique
+    // indexes, so multiple unbound bikes coexist without violating this.
+    @Column(name = "trax_serial_number", unique = true)
     private String traxSerialNumber;
 
     private boolean motorCertified;

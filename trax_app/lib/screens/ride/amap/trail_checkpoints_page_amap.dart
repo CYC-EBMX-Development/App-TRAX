@@ -10,6 +10,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart' as gmap;
 
 import '../../../common/network/trax_api.dart';
 import '../../../common/utils/amap_adapter.dart';
+import '../../../common/utils/map_styles.dart';
 import '../../../common/utils/start_end_marker_icons_amap.dart';
 import '../../../common/widgets/page_code_badge.dart';
 import '../../../common/widgets/trax_refresh_button.dart';
@@ -410,7 +411,12 @@ class _TrailCheckpointsPageAmapState extends State<TrailCheckpointsPageAmap> {
       apiKey: AmapAdapter.apiKey(),
       initialCameraPosition: AmapAdapter.initialCamera(_trailRoute, zoom: 14),
       polylines: {
-        if (_trailRoute.length >= 2) AmapAdapter.routePolyline(_trailRoute),
+        if (_trailRoute.length >= 2) ...[
+          AmapAdapter.routePolyline(_trailRoute,
+              color: MapStyles.trailHaloColor,
+              width: MapStyles.trailHaloWidth),
+          AmapAdapter.routePolyline(_trailRoute, color: MapStyles.trailColor),
+        ],
       },
       markers: markers,
       scrollGesturesEnabled: true,

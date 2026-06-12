@@ -23,6 +23,18 @@ public class AuthController {
         return ApiResponse.success("Login successful", data);
     }
 
+    /**
+     * Exchange a refresh token for a freshly-rotated (access, refresh) pair.
+     * Stateless: no DB row \u2014 the refresh token's signature, expiry, and
+     * {@code type=refresh} claim are the sole gate. The old refresh token
+     * is implicitly discarded; clients MUST persist the returned pair.
+     */
+    @PostMapping("/refresh")
+    public ApiResponse<LoginData> refresh(@RequestBody RefreshRequest request) {
+        LoginData data = authService.refreshAccessToken(request.getRefreshToken());
+        return ApiResponse.success("Token refreshed", data);
+    }
+
     /** Check if email is available for registration (not already taken). */
     @GetMapping("/verify-email")
     public ApiResponse<Void> verifyEmail(@RequestParam String email) {

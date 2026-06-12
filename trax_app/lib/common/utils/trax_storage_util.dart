@@ -2,12 +2,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class TraxStorageUtil {
   static const String _keyToken = "trax_token";
+  static const String _keyRefreshToken = "trax_refresh_token";
   static const String _keyTokenType = "trax_token_type";
   static const String _keyUserInfo = "trax_user_info";
   static const String _keyLoginEmail = "trax_login_email";
   static const String _keyLoginTime = "trax_login_time";
   static const String _keySelectedBikeId = "trax_selected_bike_id";
-  static const int _loginExpireDays = 30;
+  // Mirrors backend `jwt.refresh-expiration` (90d). Access token alone is
+  // 30d; the longer outer window lets `AppTokenInterceptor` attempt a
+  // refresh on cold-start even after the access JWT has expired.
+  static const int _loginExpireDays = 90;
 
   static late SharedPreferences _prefs;
 
@@ -41,6 +45,16 @@ class TraxStorageUtil {
   }
 
   static String getToken() => _getString(_keyToken);
+
+  /// Long-lived refresh token (90d). Persisted separately from the access
+  /// token so `AppTokenInterceptor` can silently exchange it for a fresh
+  /// (access, refresh) pair via `POST /api/auth/refresh` when a request
+  /// comes back 401.
+  static Future<void> saveRefreshToken(String? token) async {
+    await _setString(_keyRefreshToken, token ?? '');
+  }
+
+  static String getRefreshToken() => _getString(_keyRefreshToken);
 
   static Future<void> saveTokenType(String? tokenType) async {
     await _setString(_keyTokenType, tokenType ?? '');
@@ -77,6 +91,7 @@ class TraxStorageUtil {
 
   static Future<void> clearToken() async {
     await _setString(_keyToken, '');
+    await _setString(_keyRefreshToken, '');
     await _setString(_keyTokenType, '');
     await _prefs.remove(_keyLoginTime);
   }

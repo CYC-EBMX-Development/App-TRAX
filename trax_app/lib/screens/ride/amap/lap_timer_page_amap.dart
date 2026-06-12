@@ -8,7 +8,6 @@ import 'package:geolocator/geolocator.dart';
 import 'package:get/get.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart' show LatLng;
 import 'package:trax_app/common/widgets/page_code_badge.dart';
-import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../../common/network/trax_api.dart';
 import '../../../common/utils/amap_adapter.dart';
@@ -23,6 +22,8 @@ import '../../../models/ride_lap.dart';
 import '../../../models/trail.dart';
 import '../../../models/user_checkpoint.dart';
 import '../../../services/active_ride_service.dart';
+import '../../../common/utils/map_styles.dart';
+import '../../../common/utils/keep_awake_mixin.dart';
 import '../../../theme/app_theme.dart';
 import '../../../widgets/lap_splits_grid.dart';
 
@@ -50,8 +51,13 @@ class LapTimerPageAmap extends StatefulWidget {
   State<LapTimerPageAmap> createState() => _LapTimerPageAmapState();
 }
 
-class _LapTimerPageAmapState extends State<LapTimerPageAmap> {
+class _LapTimerPageAmapState extends State<LapTimerPageAmap>
+    with KeepAwakeMixin<LapTimerPageAmap> {
   final _svc = ActiveRideService.instance;
+
+  /// With-module bikes use the module's GPS, never the phone's. Keep this
+  /// in sync with the Google variant.
+  bool get _hasModule => widget.selectedBike.traxSerialNumber != null;
 
   AMapController? _mapController;
   bool _mapReady = false;
@@ -78,7 +84,6 @@ class _LapTimerPageAmapState extends State<LapTimerPageAmap> {
   @override
   void initState() {
     super.initState();
-    WakelockPlus.enable();
     _svc.addListener(_onSvcUpdate);
     _loadTrailRoute();
     _loadUserCheckpoints();
@@ -104,7 +109,6 @@ class _LapTimerPageAmapState extends State<LapTimerPageAmap> {
   void dispose() {
     _svc.removeListener(_onSvcUpdate);
     _mapController?.disponse();
-    WakelockPlus.disable();
     super.dispose();
   }
 
@@ -189,6 +193,9 @@ class _LapTimerPageAmapState extends State<LapTimerPageAmap> {
   }
 
   Future<void> _initLocation() async {
+    // Module bikes must never seed `_svc.currentPos` from the phone GPS —
+    // the camera waits for the first module telemetry packet instead.
+    if (_hasModule) return;
     try {
       var perm = await Geolocator.checkPermission();
       if (perm == LocationPermission.denied) {
@@ -378,14 +385,14 @@ class _LapTimerPageAmapState extends State<LapTimerPageAmap> {
                       if (_trailRoute.length >= 2)
                         Polyline(
                           points: AmapAdapter.toAmapList(_trailRoute),
-                          color: AppColors.primary.withValues(alpha: 0.5),
-                          width: 14,
+                          color: MapStyles.trailDimmedColor,
+                          width: MapStyles.trailWidth.toDouble(),
                         ),
                       if (_svc.route.length >= 2)
                         Polyline(
                           points: AmapAdapter.toAmapList(_svc.route),
-                          color: Colors.red,
-                          width: 14,
+                          color: MapStyles.rideTrackColor,
+                          width: MapStyles.rideTrackWidth.toDouble(),
                         ),
                     },
                     markers: {
@@ -410,7 +417,14 @@ class _LapTimerPageAmapState extends State<LapTimerPageAmap> {
                             if (mounted) setState(() {});
                           },
                         ),
-                      if (isRunning)
+                      // Show 'me' marker whenever the rider's position is
+                      // trustworthy: during the ride, OR pre-ride when the
+                      // module has reported its first telemetry fix. For
+                      // module bikes this suppresses the marker until
+                      // telemetry arrives, avoiding the hard-coded
+                      // fallback `currentPos`.
+                      if (isRunning ||
+                          (_hasModule && _svc.telemetry != null))
                         Marker(
                           position: AmapAdapter.toAmap(_svc.currentPos),
                           icon: _meIcon ?? BitmapDescriptor.defaultMarker,

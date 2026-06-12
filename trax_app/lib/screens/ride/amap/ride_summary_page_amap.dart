@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import '../../../common/network/trax_api.dart';
 import '../../../common/services/map_service.dart';
 import '../../../common/utils/amap_adapter.dart';
+import '../../../common/utils/map_styles.dart';
 import '../../../common/widgets/trax_dialog.dart';
 import '../../../common/widgets/trax_refresh_button.dart';
 import '../../../models/ride_lap.dart';
@@ -141,7 +142,10 @@ class _RideSummaryPageAmapState extends State<RideSummaryPageAmap> {
       privacyStatement: AmapAdapter.privacy(),
       apiKey: AmapAdapter.apiKey(),
       initialCameraPosition: AmapAdapter.initialCamera(_route, zoom: 14),
-      polylines: {AmapAdapter.routePolyline(_route, color: Colors.red)},
+      polylines: {
+        AmapAdapter.routePolyline(_route,
+            color: MapStyles.rideTrackColor, width: MapStyles.rideTrackWidth)
+      },
       markers: AmapAdapter.startFinishMarkers(_route),
       scrollGesturesEnabled: true,
       zoomGesturesEnabled: true,

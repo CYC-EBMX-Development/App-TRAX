@@ -43,7 +43,9 @@ server:
 
 jwt:
   secret: ${JWT_SECRET}
-  expiration: 86400000
+  # 30 days access / 90 days refresh — see application.yml for rationale.
+  expiration: 2592000000
+  refresh-expiration: 7776000000
 
 app:
   images:
@@ -59,3 +61,12 @@ logging:
   level:
     root: INFO
     com.trax: INFO
+
+# ── Lap detection tuning ────────────────────────────────────────────────
+trax:
+  lap:
+    # Minimum net displacement (m) the rider must move away from the finish
+    # line before a crossing is accepted as a completed lap. Distance-based
+    # (sampling-rate independent). 8 m suits a dual-band L1+L5 antenna
+    # (~1–2 m CEP); raise toward ~20 m for a noisier single-band L1 module.
+    leaving-net-displacement-m: 8.0

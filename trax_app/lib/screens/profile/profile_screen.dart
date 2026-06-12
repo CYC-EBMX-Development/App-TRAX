@@ -6,7 +6,6 @@ import 'package:get/get.dart';
 import '../../common/global/global_user_info.dart';
 import '../../common/network/trax_api.dart';
 import '../../common/services/app_update_service.dart';
-import '../../common/services/gps_interval_settings.dart';
 import '../../common/utils/trax_storage_util.dart';
 import '../../common/widgets/trax_refresh_button.dart';
 import '../../models/ebike.dart';
@@ -321,44 +320,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     showTraxSnackBar(context, '$feature coming soon');
   }
 
-  Future<void> _openGpsIntervalPicker() async {
-    final current = GpsIntervalSettings.baseIntervalMs;
-    final picked = await showDialog<int>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('GPS Sampling Rate'),
-        children: [
-          for (final ms in GpsIntervalSettings.options)
-            RadioListTile<int>(
-              value: ms,
-              groupValue: current,
-              title: Text(GpsIntervalSettings.labelFor(ms)),
-              subtitle: Text(_gpsIntervalHint(ms)),
-              onChanged: (v) => Navigator.pop(ctx, v),
-            ),
-        ],
-      ),
-    );
-    if (picked != null && picked != current) {
-      await GpsIntervalSettings.set(picked);
-      if (mounted) setState(() {});
-    }
-  }
-
-  String _gpsIntervalHint(int ms) {
-    switch (ms) {
-      case 100:
-        return 'Highest precision · higher battery usage';
-      case 200:
-        return 'Balanced precision and battery';
-      case 500:
-        return 'Lower precision · better battery life';
-      case 1000:
-        return 'Lowest precision · best battery life';
-    }
-    return '';
-  }
-
   @override
   Widget build(BuildContext context) =>
       PageCodeBadge(code: '300', child: _buildContent(context));
@@ -414,10 +375,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     onTap: _openEditProfile),
                 _MenuItem(Icons.lock_outline, 'Change Password', '',
                     onTap: _openChangePassword),
-                _MenuItem(Icons.gps_fixed, 'GPS Sampling',
-                    GpsIntervalSettings.labelFor(
-                        GpsIntervalSettings.baseIntervalMs),
-                    onTap: _openGpsIntervalPicker),
                 _MenuItem(Icons.language, 'Language', 'English',
                     onTap: () => _comingSoon('Language settings')),
                 _MenuItem(Icons.notifications_outlined, 'Notifications', '',

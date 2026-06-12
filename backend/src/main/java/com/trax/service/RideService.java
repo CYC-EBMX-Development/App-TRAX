@@ -3,6 +3,13 @@ package com.trax.service;
 import com.trax.dto.*;
 import com.trax.model.*;
 import com.trax.repository.*;
+import com.trax.signal.LocationIngestService;
+import com.trax.signal.PhoneGpsAdapter;
+import com.trax.signal.UnifiedLocationFrame;
+import com.trax.websocket.RideLapWebSocketHandler;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,6 +22,8 @@ import com.trax.util.GeoUtils;
 
 @Service
 public class RideService {
+    private static final Logger log = LoggerFactory.getLogger(RideService.class);
+
     private final RideRecordRepository rideRecordRepository;
     private final RidePointRepository ridePointRepository;
     private final BicycleRepository bicycleRepository;
@@ -27,6 +36,11 @@ public class RideService {
     private final RaceRepository raceRepository;
     private final UserCheckpointRepository userCheckpointRepository;
     private final RideLapCheckpointRepository rideLapCheckpointRepository;
+    private final LocationIngestService locationIngestService;
+
+    /** Optional — only present when the WebSocket auto-config is active. */
+    @Autowired(required = false)
+    private RideLapWebSocketHandler lapWsHandler;
 
     // Lap detection thresholds
     private static final double OVERLAP_THRESHOLD_KM = 0.03; // 30m to count as "on trail"
@@ -50,14 +64,31 @@ public class RideService {
      *  along the trail's forward direction (not just randomly crossing it
      *  while moving around in the pit area). */
     private static final int APPROACH_LOOKBACK_POINTS = 5;
-    /** Approach-direction filter: minimum net displacement (m) over the
-     *  lookback window. If the rider is essentially hovering, refuse to
-     *  close a lap regardless of crossing geometry. */
-    private static final double APPROACH_MIN_DISPLACEMENT_M = 10.0;
+    /** Approach-direction filter: max recent ride points retained for the
+     *  distance-based leaving window. Large enough to span the configured
+     *  net-displacement threshold even at 5 Hz dense sampling at low speed
+     *  (64 pts ≈ 12.8 s @5 Hz / 64 s @1 Hz). */
+    private static final int APPROACH_BUFFER_POINTS = 64;
     /** Approach-direction filter: minimum cosine between the rider's recent
      *  net displacement vector and the trail's heading vector. 0.5 ≈ 60°
      *  cone around the forward direction. */
     private static final double APPROACH_COS_THRESHOLD = 0.5;
+
+    /**
+     * Minimum net displacement (m) the rider must move AWAY from the finish
+     * line — measured over a distance-based window, NOT a fixed point count
+     * — before a finish-line crossing is accepted. Confirms the rider is
+     * genuinely leaving (lap complete) rather than hovering/jittering near
+     * the line. Distance-based so it is independent of sampling rate (the
+     * 5 Hz finish-line densification used to shrink the old fixed 5-point
+     * window below threshold and silently drop laps).
+     *
+     * <p>Configurable via {@code trax.lap.leaving-net-displacement-m}
+     * (default 8.0). 8 m suits a dual-band L1+L5 antenna (~1–2 m CEP);
+     * raise toward ~20 m for a noisier single-band L1 module.
+     */
+    @org.springframework.beans.factory.annotation.Value("${trax.lap.leaving-net-displacement-m:8.0}")
+    private double lapLeavingNetDisplacementM;
 
     public RideService(RideRecordRepository rideRecordRepository,
                        RidePointRepository ridePointRepository,
@@ -70,7 +101,8 @@ public class RideService {
                        RaceParticipantRepository raceParticipantRepository,
                        RaceRepository raceRepository,
                        UserCheckpointRepository userCheckpointRepository,
-                       RideLapCheckpointRepository rideLapCheckpointRepository) {
+                       RideLapCheckpointRepository rideLapCheckpointRepository,
+                       LocationIngestService locationIngestService) {
         this.rideRecordRepository = rideRecordRepository;
         this.ridePointRepository = ridePointRepository;
         this.bicycleRepository = bicycleRepository;
@@ -83,6 +115,7 @@ public class RideService {
         this.raceRepository = raceRepository;
         this.userCheckpointRepository = userCheckpointRepository;
         this.rideLapCheckpointRepository = rideLapCheckpointRepository;
+        this.locationIngestService = locationIngestService;
     }
 
     public List<RideRecord> getUserRides(Long userId) {
@@ -201,16 +234,14 @@ public class RideService {
         RideRecord ride = getOwnedRide(rideId, userId);
         if (request.getPoints() != null) {
             for (RidePointDto dto : request.getPoints()) {
-                RidePoint point = new RidePoint();
-                point.setRide(ride);
-                point.setLatitude(dto.getLatitude());
-                point.setLongitude(dto.getLongitude());
-                point.setSpeed(dto.getSpeed());
-                point.setAltitude(dto.getAltitude());
-                point.setTimestamp(dto.getTimestamp() != null
-                        ? LocalDateTime.parse(dto.getTimestamp())
-                        : LocalDateTime.now());
-                ridePointRepository.save(point);
+                // Route phone batch through the unified ingest path so both
+                // module and phone data land in ride_points with consistent
+                // shape (captured_at_ms, source) and dedup. Business code
+                // downstream is source-agnostic.
+                UnifiedLocationFrame frame = PhoneGpsAdapter.fromDto(dto, null);
+                if (frame != null) {
+                    locationIngestService.ingestPhone(ride, frame);
+                }
             }
         }
         return computeCurrentStats(ride);
@@ -412,11 +443,11 @@ public class RideService {
      *     only) so going backward across the line never counts.
      *  3. Approach-direction filter: even when a forward crossing is
      *     detected geometrically, only accept it if the rider's net
-     *     displacement over the last {@link #APPROACH_LOOKBACK_POINTS}
-     *     samples is at least {@link #APPROACH_MIN_DISPLACEMENT_M} m AND
-     *     its direction is within ±60° of the trail heading. This
-     *     suppresses false positives from the rider milling around in a
-     *     pit/parking area near the finish line.
+     *     displacement over a distance-based leaving window (at least
+     *     {@code trax.lap.leaving-net-displacement-m} metres, sampling-rate
+     *     independent) is directionally within ±60° of the trail heading.
+     *     This suppresses false positives from the rider milling around in
+     *     a pit/parking area near the finish line.
      *  4. The exact crossing timestamp is interpolated linearly between
      *     prev.ts and curr.ts using the intersection parameter t.
      *  5. First accepted crossing arms the gate — lap 1 starts at that
@@ -437,9 +468,23 @@ public class RideService {
         // algorithm can backfill laps for historical rides (idempotent: only
         // processes points after the last persisted lap; auto-complete guard
         // below already checks status to avoid re-triggering finish logic).
-
+        //
+        // …with one exception: lap-timer rides that have already met their
+        // target lap count are frozen. Without this guard, a stale or
+        // continued point stream (e.g. simulator still emitting after the
+        // ride auto-completed, or a phone that uploads buffered points after
+        // the user already finished) keeps closing more laps past the goal
+        // — see ride #14 (target=1, completed=21) for the production
+        // reproduction. Backfill of incomplete lap-timer rides
+        // (existingLapCount < targetLaps) and free rides (targetLaps == 0)
+        // is still allowed.
         int existingLapCount = (ride.getCompletedLaps() != null) ? ride.getCompletedLaps() : 0;
         int targetLaps = ride.getTargetLaps() != null ? ride.getTargetLaps() : 0;
+        if ("completed".equals(ride.getStatus())
+                && targetLaps > 0
+                && existingLapCount >= targetLaps) {
+            return;
+        }
 
         double startLat = trail.getStartLatitude();
         double startLng = trail.getStartLongitude();
@@ -494,7 +539,7 @@ public class RideService {
         // Rolling buffer of the rider's most recent points (regardless of gate
         // state) used by the approach-direction filter.
         java.util.ArrayDeque<RidePoint> recent =
-                new java.util.ArrayDeque<>(APPROACH_LOOKBACK_POINTS + 1);
+                new java.util.ArrayDeque<>(APPROACH_BUFFER_POINTS + 1);
 
         // Pre-load this rider's checkpoints for this trail (personal-only).
         Long userId = (ride.getUser() != null) ? ride.getUser().getId() : null;
@@ -517,7 +562,7 @@ public class RideService {
                     // Keep the approach-direction window primed so that the
                     // first crossing after resume has enough history.
                     recent.addLast(p);
-                    while (recent.size() > APPROACH_LOOKBACK_POINTS) recent.removeFirst();
+                    while (recent.size() > APPROACH_BUFFER_POINTS) recent.removeFirst();
                 }
                 continue;
             }
@@ -551,7 +596,7 @@ public class RideService {
                     double dy = curY - prevLocal[1];
                     boolean forward = (dx * hX + dy * hY) > 0;
                     boolean approachOk = forward && isApproachAligned(
-                            recent, p, startLat, startLng, cosLat0, R, hX, hY);
+                            recent, p, cosLat0, R, hX, hY, lapLeavingNetDisplacementM);
                     if (forward && approachOk) {
                         long segMs = Duration.between(prev.getTimestamp(), p.getTimestamp()).toMillis();
                         LocalDateTime crossingTs = prev.getTimestamp()
@@ -601,7 +646,7 @@ public class RideService {
             prev = p;
             prevLocal = new double[]{curX, curY};
             recent.addLast(p);
-            while (recent.size() > APPROACH_LOOKBACK_POINTS) recent.removeFirst();
+            while (recent.size() > APPROACH_BUFFER_POINTS) recent.removeFirst();
         }
 
         if (!newLaps.isEmpty()) {
@@ -612,6 +657,7 @@ public class RideService {
             ride.setCompletedLaps(completed);
 
             // Auto-end ride when target reached
+            boolean justCompleted = false;
             if (targetLaps > 0 && completed >= targetLaps && !"completed".equals(ride.getStatus())) {
                 ride.setEndTime(newLaps.get(newLaps.size() - 1).getEndTime());
                 ride.setStatus("completed");
@@ -619,32 +665,110 @@ public class RideService {
                 // If this ride belongs to a race, mark the participant finished
                 // and complete the race when everyone is done.
                 autoFinishRaceParticipantForRide(ride);
+                justCompleted = true;
             }
             rideRecordRepository.save(ride);
+
+            // Push every new lap + a final "completed" event to live WS
+            // subscribers so the App can refetch /stats without waiting
+            // for the next 3 s poll. Best-effort: failures are swallowed.
+            broadcastNewLaps(ride, newLaps, completed, targetLaps, justCompleted);
         }
     }
 
     /**
-     * Approach-direction filter. Returns true when the rider's net
-     * displacement across the recent window (ending at {@code current}) is
-     * long enough AND directionally aligned with the trail's forward
-     * heading. Returns true with too-short history so the very first few
-     * points don't all get rejected; callers still gate on {@code forward}.
+     * Approach-direction filter (distance-based, sampling-rate independent).
+     * Returns true when the rider has moved at least {@code minNetDisplacementM}
+     * away from the recent window AND that net displacement is directionally
+     * aligned with the trail's forward heading.
+     *
+     * <p>Walks {@code recent} from newest → oldest and picks the closest-in-time
+     * point that is already {@code minNetDisplacementM} away from {@code current},
+     * giving the tightest window that still spans the threshold — responsive yet
+     * robust to single-point GPS jitter. Crucially the window is defined by
+     * DISTANCE, not point count, so 5 Hz finish-line densification can no longer
+     * shrink it below threshold (the old fixed 5-point window did, dropping laps).
+     *
+     * <p>Returns true when history is too short to judge (fewer than
+     * {@link #APPROACH_LOOKBACK_POINTS} points — i.e. the rider just started)
+     * so the very first crossing can still arm the gate; callers still gate on
+     * {@code forward}. Returns false when the rider has enough samples but none
+     * spans the threshold (hovering/jittering near the line).
      */
     private static boolean isApproachAligned(
             java.util.Deque<RidePoint> recent, RidePoint current,
-            double startLat, double startLng,
             double cosLat0, double R,
-            double hX, double hY) {
+            double hX, double hY,
+            double minNetDisplacementM) {
         if (recent.size() < APPROACH_LOOKBACK_POINTS) return true;
-        RidePoint oldest = recent.peekFirst();
-        if (oldest == null) return true;
-        double dx = Math.toRadians(current.getLongitude() - oldest.getLongitude()) * R * cosLat0;
-        double dy = Math.toRadians(current.getLatitude() - oldest.getLatitude()) * R;
-        double mag = Math.hypot(dx, dy);
-        if (mag < APPROACH_MIN_DISPLACEMENT_M) return false;
+        double dx = 0, dy = 0, mag = 0;
+        boolean reached = false;
+        // descendingIterator() = newest → oldest.
+        java.util.Iterator<RidePoint> it = recent.descendingIterator();
+        while (it.hasNext()) {
+            RidePoint r = it.next();
+            dx = Math.toRadians(current.getLongitude() - r.getLongitude()) * R * cosLat0;
+            dy = Math.toRadians(current.getLatitude() - r.getLatitude()) * R;
+            mag = Math.hypot(dx, dy);
+            if (mag >= minNetDisplacementM) { reached = true; break; }
+        }
+        if (!reached) return false; // hovering near the line → don't close a lap
         double cos = (dx * hX + dy * hY) / mag; // (hX,hY) is already unit length
         return cos >= APPROACH_COS_THRESHOLD;
+    }
+
+    /**
+     * Public entry point used by the module ingest path
+     * ({@link com.trax.service.ModuleTelemetryService}) to trigger lap
+     * detection immediately after a new module-sourced ride_point is
+     * persisted. Without this hook, lap detection for {@code with_module}
+     * rides would only run when a client polls {@code /stats} or
+     * {@code /laps}, which leaves the auto-finish timer idle whenever the
+     * App is backgrounded.
+     *
+     * <p>No-op (silently returns) when the ride is not a lap-timer ride,
+     * is already completed, or has no points yet. Idempotent and safe to
+     * call on every frame; the detection algorithm only emits laps beyond
+     * the existing count.
+     */
+    @Transactional
+    public void detectLapsForRideId(Long rideId) {
+        if (rideId == null) return;
+        RideRecord ride = rideRecordRepository.findById(rideId).orElse(null);
+        if (ride == null) return;
+        if (ride.getTrail() == null || ride.getTargetLaps() == null) return;
+        if ("completed".equals(ride.getStatus())) return;
+        List<RidePoint> points = ridePointRepository
+                .findByRideIdOrderByTimestampAsc(rideId);
+        if (points.isEmpty()) return;
+        detectAndPersistLaps(ride, points);
+    }
+
+    /**
+     * Best-effort push of newly persisted laps to live WS subscribers on
+     * {@code /ws/rides/{rideId}/laps}. Failures are logged and swallowed
+     * so a flaky WebSocket never breaks lap persistence.
+     */
+    private void broadcastNewLaps(RideRecord ride, List<RideLap> newLaps,
+                                  int completed, int targetLaps,
+                                  boolean justCompleted) {
+        if (lapWsHandler == null) return;
+        try {
+            String status = ride.getStatus();
+            Integer target = ride.getTargetLaps();
+            for (RideLap lap : newLaps) {
+                String endTs = lap.getEndTime() != null ? lap.getEndTime().toString() : null;
+                lapWsHandler.broadcast(ride.getId(), RideLapEventDto.lap(
+                        ride.getId(), lap.getLapNumber(), completed, target, status, endTs));
+            }
+            if (justCompleted) {
+                String endTs = ride.getEndTime() != null ? ride.getEndTime().toString() : null;
+                lapWsHandler.broadcast(ride.getId(), RideLapEventDto.completed(
+                        ride.getId(), completed, target, endTs));
+            }
+        } catch (Exception e) {
+            log.warn("Lap WS broadcast failed ride={}: {}", ride.getId(), e.toString());
+        }
     }
 
     /**
@@ -679,17 +803,13 @@ public class RideService {
             if (race == null) return;
             if (!"finished".equals(rp.getStatus())) {
                 rp.setStatus("finished");
-                long finishedCount = raceParticipantRepository
-                        .findByRaceIdAndRoleIn(race.getId(), java.util.List.of("host", "rider"))
-                        .stream()
-                        .filter(p -> "finished".equals(p.getStatus()))
-                        .count();
-                rp.setFinishRank((int) finishedCount + (rp.getFinishRank() == null ? 1 : 0));
-                if (rp.getFinishRank() == null || rp.getFinishRank() < 1) {
-                    rp.setFinishRank((int) finishedCount);
-                }
                 raceParticipantRepository.save(rp);
             }
+            // Rank by REAL finish time (crossing instant of the target lap),
+            // not by detection order — uploads can arrive out of order, so
+            // the rider whose finish point reaches the server first is not
+            // necessarily the one who crossed the line first.
+            recomputeFinishRanksByTime(race.getId());
             // Re-load and check whether all riders are done.
             List<RaceParticipant> riders = raceParticipantRepository
                     .findByRaceIdAndRoleIn(race.getId(), java.util.List.of("host", "rider"));
@@ -701,6 +821,71 @@ public class RideService {
                 raceRepository.save(race);
             }
         } catch (Exception ignored) {}
+    }
+
+    /**
+     * The real moment a rider crossed the finish line on their final
+     * (target) lap. Derived from the persisted lap whose {@code lapNumber}
+     * equals the ride's target laps; that lap's {@code endTime} comes from
+     * the GPS point's {@code capturedAtMs}, so it reflects the actual
+     * crossing time regardless of when the point was uploaded. Falls back
+     * to the latest lap's end time, then the ride's end time.
+     */
+    private LocalDateTime raceFinishInstant(RideRecord ride) {
+        if (ride == null) return null;
+        List<RideLap> laps = rideLapRepository.findByRideIdOrderByLapNumberAsc(ride.getId());
+        Integer target = ride.getTargetLaps();
+        if (target != null && target > 0) {
+            for (RideLap lap : laps) {
+                if (target.equals(lap.getLapNumber()) && lap.getEndTime() != null) {
+                    return lap.getEndTime();
+                }
+            }
+        }
+        for (int i = laps.size() - 1; i >= 0; i--) {
+            if (laps.get(i).getEndTime() != null) return laps.get(i).getEndTime();
+        }
+        return ride.getEndTime();
+    }
+
+    /**
+     * Recompute {@code finishRank} for every finished participant of a race
+     * by ordering them on their real finish-line crossing time (earliest =
+     * rank 1). This makes ranking independent of the order in which each
+     * rider's finishing GPS batch happens to reach the server (5 s batched
+     * uploads + live-poll cadence can deliver finish points out of order).
+     * Idempotent and self-correcting: re-running after every finish settles
+     * all ranks to true crossing order. Ties (equal crossing instant) are
+     * broken deterministically by ride id.
+     */
+    @Transactional
+    public void recomputeFinishRanksByTime(Long raceId) {
+        if (raceId == null) return;
+        List<RaceParticipant> finished = raceParticipantRepository
+                .findByRaceIdAndRoleIn(raceId, java.util.List.of("host", "rider"))
+                .stream()
+                .filter(p -> "finished".equals(p.getStatus()) && p.getRide() != null)
+                .sorted((a, b) -> {
+                    LocalDateTime ta = raceFinishInstant(a.getRide());
+                    LocalDateTime tb = raceFinishInstant(b.getRide());
+                    if (ta == null && tb == null) {
+                        return Long.compare(a.getRide().getId(), b.getRide().getId());
+                    }
+                    if (ta == null) return 1;   // unknown finish time sorts last
+                    if (tb == null) return -1;
+                    int c = ta.compareTo(tb);
+                    if (c != 0) return c;
+                    return Long.compare(a.getRide().getId(), b.getRide().getId());
+                })
+                .toList();
+        int rank = 1;
+        for (RaceParticipant p : finished) {
+            Integer newRank = rank++;
+            if (!newRank.equals(p.getFinishRank())) {
+                p.setFinishRank(newRank);
+                raceParticipantRepository.save(p);
+            }
+        }
     }
 
     /**

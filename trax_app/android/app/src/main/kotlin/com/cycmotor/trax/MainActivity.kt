@@ -1,4 +1,4 @@
-package com.trax.trax_app
+package com.cycmotor.trax
 
 import io.flutter.embedding.android.FlutterActivity
 

@@ -5,6 +5,7 @@ import '../../common/services/map_service.dart';
 import '../../common/utils/map_gesture_recognizers.dart';
 import '../../common/utils/start_end_marker_icons.dart';
 import '../../common/network/trax_api.dart';
+import '../../common/utils/map_styles.dart';
 import '../../theme/app_theme.dart';
 import 'package:trax_app/common/widgets/page_code_badge.dart';
 
@@ -103,10 +104,16 @@ class _TrailSavePageState extends State<TrailSavePage> {
                     ),
                     polylines: {
                       Polyline(
+                        polylineId: const PolylineId('trail_halo'),
+                        points: widget.route,
+                        color: MapStyles.trailHaloColor,
+                        width: MapStyles.trailHaloWidth,
+                      ),
+                      Polyline(
                         polylineId: const PolylineId('trail'),
                         points: widget.route,
-                        color: AppColors.primary,
-                        width: 2,
+                        color: MapStyles.trailColor,
+                        width: MapStyles.trailWidth,
                       ),
                     },
                     markers: {

@@ -31,7 +31,10 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         String authHeader = request.getHeader("Authorization");
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
             String token = authHeader.substring(7);
-            if (jwtUtil.validateToken(token)) {
+            // Reject refresh tokens at the API perimeter \u2014 they may only
+            // be presented to POST /api/auth/refresh. Legacy tokens without
+            // a type claim are treated as access (extractType defaults).
+            if (jwtUtil.validateToken(token) && !jwtUtil.isRefreshToken(token)) {
                 String email = jwtUtil.extractEmail(token);
                 userRepository.findByEmail(email).ifPresent(user -> {
                     var auth = new UsernamePasswordAuthenticationToken(

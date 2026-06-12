@@ -48,4 +48,16 @@ open(p, 'w').write(s)
 PY
 fi
 
+# 4) amap_flutter_location iOS: AMapLocation 2.11.x removed the
+#    `setReGeocodeLanguage:` API and its `AMapLocationReGeocodeLanguage*`
+#    enum, but the 4-years-stale plugin still calls them → iOS build fails
+#    with "use of undeclared identifier". We never request re-geocoded
+#    addresses (LocationService only reads lat/lon/accuracy), so comment the
+#    three offending calls out.
+LOC_M="$CACHE/amap_flutter_location-3.0.0/ios/Classes/AMapFlutterLocationPlugin.m"
+if [[ -f "$LOC_M" ]] && grep -qE '^[^/]*\[manager setReGeocodeLanguage:AMapLocationReGeocodeLanguage' "$LOC_M"; then
+  echo "==> Patching amap_flutter_location iOS: drop removed setReGeocodeLanguage calls"
+  sed -i '' -E 's|^([[:space:]]*)(\[manager setReGeocodeLanguage:AMapLocationReGeocodeLanguage.*\];)|\1// \2 // patched: API removed in AMapLocation 2.11+|' "$LOC_M"
+fi
+
 echo "==> Done. AMap plugins patched for Flutter 3.x / AGP 8."

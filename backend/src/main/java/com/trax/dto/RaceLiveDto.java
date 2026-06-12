@@ -12,6 +12,10 @@ public class RaceLiveDto {
     private String gameType;
     private long elapsedSeconds;
     private List<RiderLiveInfo> riders;
+    private Long timelineStartMs;
+    private Long timelineEndMs;
+    private Integer timelineResolutionMs;
+    private List<AlignedFrameDto> alignedFrames;
 
     public Long getRaceId() { return raceId; }
     public void setRaceId(Long raceId) { this.raceId = raceId; }
@@ -23,6 +27,14 @@ public class RaceLiveDto {
     public void setElapsedSeconds(long elapsedSeconds) { this.elapsedSeconds = elapsedSeconds; }
     public List<RiderLiveInfo> getRiders() { return riders; }
     public void setRiders(List<RiderLiveInfo> riders) { this.riders = riders; }
+    public Long getTimelineStartMs() { return timelineStartMs; }
+    public void setTimelineStartMs(Long timelineStartMs) { this.timelineStartMs = timelineStartMs; }
+    public Long getTimelineEndMs() { return timelineEndMs; }
+    public void setTimelineEndMs(Long timelineEndMs) { this.timelineEndMs = timelineEndMs; }
+    public Integer getTimelineResolutionMs() { return timelineResolutionMs; }
+    public void setTimelineResolutionMs(Integer timelineResolutionMs) { this.timelineResolutionMs = timelineResolutionMs; }
+    public List<AlignedFrameDto> getAlignedFrames() { return alignedFrames; }
+    public void setAlignedFrames(List<AlignedFrameDto> alignedFrames) { this.alignedFrames = alignedFrames; }
 
     public static class RiderLiveInfo {
         private Long userId;
@@ -38,6 +50,7 @@ public class RaceLiveDto {
         private long durationSeconds;
         private Integer completedLaps;
         private Long bestLapSeconds;
+        private Long lastCapturedAtMs;
         private List<RideLapDto> laps;
         private List<PointDto> route;
         private Long bicycleId;
@@ -70,6 +83,8 @@ public class RaceLiveDto {
         public void setCompletedLaps(Integer completedLaps) { this.completedLaps = completedLaps; }
         public Long getBestLapSeconds() { return bestLapSeconds; }
         public void setBestLapSeconds(Long bestLapSeconds) { this.bestLapSeconds = bestLapSeconds; }
+        public Long getLastCapturedAtMs() { return lastCapturedAtMs; }
+        public void setLastCapturedAtMs(Long lastCapturedAtMs) { this.lastCapturedAtMs = lastCapturedAtMs; }
         public List<RideLapDto> getLaps() { return laps; }
         public void setLaps(List<RideLapDto> laps) { this.laps = laps; }
         public List<PointDto> getRoute() { return route; }
@@ -85,16 +100,50 @@ public class RaceLiveDto {
     public static class PointDto {
         private double latitude;
         private double longitude;
+        private Long capturedAtMs;
 
         public PointDto() {}
         public PointDto(double latitude, double longitude) {
             this.latitude = latitude;
             this.longitude = longitude;
         }
+        public PointDto(double latitude, double longitude, Long capturedAtMs) {
+            this.latitude = latitude;
+            this.longitude = longitude;
+            this.capturedAtMs = capturedAtMs;
+        }
 
         public double getLatitude() { return latitude; }
         public void setLatitude(double latitude) { this.latitude = latitude; }
         public double getLongitude() { return longitude; }
         public void setLongitude(double longitude) { this.longitude = longitude; }
+        public Long getCapturedAtMs() { return capturedAtMs; }
+        public void setCapturedAtMs(Long capturedAtMs) { this.capturedAtMs = capturedAtMs; }
+    }
+
+    public static class AlignedFrameDto {
+        private Long capturedAtMs;
+        private List<AlignedRiderPointDto> riders;
+
+        public Long getCapturedAtMs() { return capturedAtMs; }
+        public void setCapturedAtMs(Long capturedAtMs) { this.capturedAtMs = capturedAtMs; }
+        public List<AlignedRiderPointDto> getRiders() { return riders; }
+        public void setRiders(List<AlignedRiderPointDto> riders) { this.riders = riders; }
+    }
+
+    public static class AlignedRiderPointDto {
+        private Long userId;
+        private double latitude;
+        private double longitude;
+        private double speed;
+
+        public Long getUserId() { return userId; }
+        public void setUserId(Long userId) { this.userId = userId; }
+        public double getLatitude() { return latitude; }
+        public void setLatitude(double latitude) { this.latitude = latitude; }
+        public double getLongitude() { return longitude; }
+        public void setLongitude(double longitude) { this.longitude = longitude; }
+        public double getSpeed() { return speed; }
+        public void setSpeed(double speed) { this.speed = speed; }
     }
 }

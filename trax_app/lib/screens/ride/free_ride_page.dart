@@ -1,14 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:wakelock_plus/wakelock_plus.dart';
 import '../../common/utils/map_gesture_recognizers.dart';
 import 'package:geolocator/geolocator.dart';
 import '../../models/ebike.dart';
 import '../../models/module_telemetry.dart';
 import '../../services/active_ride_service.dart';
 import '../../common/network/trax_api.dart';
+import '../../common/utils/location_signal_gate.dart';
+import '../../common/utils/keep_awake_mixin.dart';
+import '../../common/services/location_service.dart';
+import '../../common/widgets/my_location_fab.dart';
+import '../../common/widgets/satellite_badge.dart';
 import '../../common/widgets/trax_dialog.dart';
+import '../../common/utils/map_styles.dart';
 import '../../theme/app_theme.dart';
 import '../../common/widgets/map_router.dart';
 import 'package:trax_app/common/widgets/page_code_badge.dart';
@@ -21,37 +26,45 @@ class FreeRidePage extends StatefulWidget {
   State<FreeRidePage> createState() => _FreeRidePageState();
 }
 
-class _FreeRidePageState extends State<FreeRidePage> {
+class _FreeRidePageState extends State<FreeRidePage>
+    with KeepAwakeMixin<FreeRidePage> {
   final _svc = ActiveRideService.instance;
 
   // Map
   GoogleMapController? _mapController;
   bool _mapReady = false;
 
-  // Location picker state
-  bool _isPicking = false;   // true = crosshair visible, panning to pick
-  LatLng? _pickedLocation;   // confirmed picked location
-
   bool get _hasModule => widget.selectedBike.traxSerialNumber != null;
 
   @override
   void initState() {
     super.initState();
-    // Keep the screen awake throughout the ride session.
-    WakelockPlus.enable();
+    // Screen stays awake throughout the ride session (KeepAwakeMixin),
+    // re-asserted on app resume so iOS can't drop it mid-ride.
     _svc.addListener(_onServiceUpdate);
     _initLocation();
+    // Pre-Start preview: subscribe to module telemetry now so the
+    // my-location button can show the bike's live position before the
+    // rider taps Start. Pre-Start frames are NOT persisted into the
+    // recorded route (see ActiveRideService._onModuleTelemetryJson).
+    if (_hasModule) {
+      _svc.previewModule(widget.selectedBike);
+    }
   }
 
   void _onServiceUpdate() {
     if (mounted) setState(() {});
-    // Auto-follow camera only during active ride, not when picking or idle
-    if (_mapReady && _mapController != null && _svc.rideStatus != 'idle' && !_isPicking) {
+    // Auto-follow camera only during active ride
+    if (_mapReady && _mapController != null && _svc.rideStatus != 'idle') {
       _mapController!.animateCamera(CameraUpdate.newLatLng(_svc.currentPos));
     }
   }
 
   Future<void> _initLocation() async {
+    // With-module bikes show the bike's position only — never the
+    // phone GPS. If the module has no signal yet, the map simply stays
+    // at the default camera until the first telemetry arrives.
+    if (_hasModule) return;
     var perm = await Geolocator.checkPermission();
     if (perm == LocationPermission.denied) {
       perm = await Geolocator.requestPermission();
@@ -78,66 +91,53 @@ class _FreeRidePageState extends State<FreeRidePage> {
   @override
   void dispose() {
     _svc.removeListener(_onServiceUpdate);
+    // Tear down the pre-Start preview subscription if the rider left
+    // without starting a ride. No-op if a ride is already active.
+    _svc.stopPreview();
     _mapController?.dispose();
-    WakelockPlus.disable();
     super.dispose();
   }
 
-  // ── Location Picker ───────────────────────────────────────
+  // ── My Location ───────────────────────────────────────────
 
-  // Approximate bottom panel height (stats + controls + padding)
-  static const double _bottomPanelHeight = 240.0;
-
-  /// Y-coordinate for the center of the visible map area (above the bottom panel)
-  double get _mapCenterY {
-    final screenH = MediaQuery.of(context).size.height;
-    return (screenH - _bottomPanelHeight) / 2;
-  }
-
-  Future<void> _onPickLocationTap() async {
-    if (_isPicking) {
-      // Second tap: confirm the center of the visible map area
-      if (_mapController == null) return;
-      final center = await _mapController!.getLatLng(
-        ScreenCoordinate(
-          x: (MediaQuery.of(context).size.width / 2).round(),
-          y: _mapCenterY.round(),
-        ),
-      );
-      setState(() {
-        _isPicking = false;
-        _pickedLocation = center;
-        _svc.currentPos = center;
-      });
-      // Animate to the confirmed location
-      _mapController?.animateCamera(CameraUpdate.newLatLng(center));
-    } else {
-      // First tap: enter picking mode
-      setState(() {
-        _isPicking = true;
-        _pickedLocation = null;
-      });
+  /// Recenter camera on user's current position. If no signal is available,
+  /// show a snackbar explaining whether the module or phone GPS is the
+  /// missing source.
+  Future<void> _onMyLocationTap() async {
+    if (_hasModule) {
+      // With-module path: rely on the module telemetry stream.
+      if (_svc.telemetry == null) {
+        if (!mounted) return;
+        showTraxSnackBar(context, 'Unable to get bike module signal', isError: true);
+        return;
+      }
+      _animateToCurrentPos();
+      return;
     }
-  }
 
-  void _clearPickedLocation() {
-    setState(() {
-      _pickedLocation = null;
-      _isPicking = false;
-    });
-    _initLocation(); // re-fetch real GPS
+    // Phone-GPS path: dual-source fix (Geolocator + AMap, first wins) so it
+    // also works indoors in mainland China and never hangs.
+    final fix = await LocationService.getFix();
+    if (!mounted) return;
+    if (fix == null) {
+      showTraxSnackBar(context, 'Unable to get phone GPS signal', isError: true);
+      return;
+    }
+    _svc.currentPos = fix;
+    setState(() {});
+    _animateToCurrentPos();
   }
 
   // ── Ride Controls ─────────────────────────────────────────
 
   Future<void> _onStart() async {
+    final gateOk = await LocationSignalGate.ensureSignalOrConfirm(
+      context: context,
+      bike: widget.selectedBike,
+    );
+    if (!gateOk || !mounted) return;
     final ok = await _svc.startRide(widget.selectedBike);
     if (!mounted || !ok) return;
-    // Clear picked location once ride starts
-    setState(() {
-      _pickedLocation = null;
-      _isPicking = false;
-    });
   }
 
   Future<void> _onPause() async {
@@ -203,7 +203,9 @@ class _FreeRidePageState extends State<FreeRidePage> {
           // Map
           GoogleMap(
             initialCameraPosition: CameraPosition(target: currentPos, zoom: 16),
-            myLocationEnabled: true,
+            // Native blue-dot is phone GPS — hide it on module bikes so the
+            // map only ever shows the bike's location.
+            myLocationEnabled: !_hasModule,
             myLocationButtonEnabled: false,
             zoomControlsEnabled: false,
             gestureRecognizers: kMapGestureRecognizers,
@@ -212,20 +214,12 @@ class _FreeRidePageState extends State<FreeRidePage> {
                     Polyline(
                       polylineId: const PolylineId('route'),
                       points: route,
-                      color: Colors.red,
-                      width: 6,
+                      color: MapStyles.rideTrackColor,
+                      width: MapStyles.rideTrackWidth,
                     ),
                   }
                 : {},
             markers: {
-              // Show confirmed picked-location pin when idle
-              if (rideStatus == 'idle' && _pickedLocation != null && !_isPicking)
-                Marker(
-                  markerId: const MarkerId('picked'),
-                  position: _pickedLocation!,
-                  icon: BitmapDescriptor.defaultMarkerWithHue(
-                      BitmapDescriptor.hueRed),
-                ),
               // Show current-position marker during ride
               if (rideStatus != 'idle' && route.isNotEmpty)
                 Marker(
@@ -234,6 +228,23 @@ class _FreeRidePageState extends State<FreeRidePage> {
                   icon: BitmapDescriptor.defaultMarkerWithHue(
                       BitmapDescriptor.hueOrange),
                 ),
+              // Pre-ride my-location dot for module bikes: native blue dot
+              // is disabled when `_hasModule`, so we draw our own once the
+              // module reports its first fix. Suppressed during the ride
+              // because the 'current' marker above already represents the
+              // rider's live position.
+              if (rideStatus == 'idle' &&
+                  _hasModule &&
+                  telemetry != null)
+                Marker(
+                  markerId: const MarkerId('me_module'),
+                  position: currentPos,
+                  icon: BitmapDescriptor.defaultMarkerWithHue(
+                      BitmapDescriptor.hueAzure),
+                  anchor: const Offset(0.5, 0.5),
+                  infoWindow:
+                      const InfoWindow(title: 'My bike location'),
+                ),
             },
             onMapCreated: (c) {
               _mapController = c;
@@ -241,19 +252,6 @@ class _FreeRidePageState extends State<FreeRidePage> {
               _animateToCurrentPos();
             },
           ),
-
-          // Center crosshair when picking (positioned at visible map center, above bottom panel)
-          if (_isPicking)
-            Positioned(
-              left: 0,
-              right: 0,
-              top: _mapCenterY - 20, // half of icon size
-              child: const IgnorePointer(
-                child: Center(
-                  child: Icon(Icons.add, size: 40, color: AppColors.error),
-                ),
-              ),
-            ),
 
           // Back button — just pops, ride continues in background
           Positioned(
@@ -268,99 +266,31 @@ class _FreeRidePageState extends State<FreeRidePage> {
             ),
           ),
 
-          // Pick-location button (top, beside back button) — only when idle
-          if (rideStatus == 'idle')
-            Positioned(
-              top: safeTop + 8,
-              left: 72,
-              child: CircleAvatar(
-                backgroundColor: _isPicking ? AppColors.primary : AppColors.surface,
-                child: IconButton(
-                  icon: Icon(
-                    _isPicking ? Icons.check : Icons.pin_drop,
-                    color: _isPicking ? Colors.white : AppColors.textPrimary,
-                    size: 20,
-                  ),
-                  onPressed: _onPickLocationTap,
-                  tooltip: _isPicking ? 'Confirm Location' : 'Pick Location',
-                ),
-              ),
-            ),
+          // My-location button (bottom-right, above bottom panel)
+          Positioned(
+            right: 14,
+            bottom: 256, // bottom panel (~240) + 16 margin
+            child: MyLocationFab(onTap: _onMyLocationTap),
+          ),
 
-          // Picking-mode hint banner (top-center)
-          if (_isPicking)
-            Positioned(
-              top: safeTop + 8,
-              left: 120,
-              right: 60,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: AppColors.surface,
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 8),
-                  ],
-                ),
-                child: const Text(
-                  'Move map, then tap ✓ to confirm',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            ),
-
-          // Picked-location info chip (top-center)
-          if (rideStatus == 'idle' && _pickedLocation != null && !_isPicking)
-            Positioned(
-              top: safeTop + 8,
-              left: 120,
-              right: 60,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: AppColors.surface,
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 8),
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.pin_drop, size: 16, color: AppColors.error),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        '${_pickedLocation!.latitude.toStringAsFixed(5)}, ${_pickedLocation!.longitude.toStringAsFixed(5)}',
-                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    GestureDetector(
-                      onTap: _clearPickedLocation,
-                      child: const Icon(Icons.close, size: 16, color: AppColors.textSecondary),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-
-          // GPS info chip (top-right) — hide when picked location is shown or picking
-          if (!_isPicking && _pickedLocation == null)
-            Positioned(
-              top: safeTop + 8,
-              right: 16,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  _GpsInfoChip(position: currentPos),
-                  if (_hasModule && telemetry != null) ...[
-                    const SizedBox(height: 8),
-                    _ModuleInfoChip(telemetry: telemetry),
-                  ],
+          // GPS info chip (top-right)
+          Positioned(
+            top: safeTop + 8,
+            right: 16,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                _GpsInfoChip(position: currentPos),
+                if (_hasModule) ...[
+                  const SizedBox(height: 8),
+                  SatelliteBadge(count: telemetry?.satellites),
                 ],
-              ),
+                if (_hasModule && telemetry != null) ...[
+                  const SizedBox(height: 8),
+                  _ModuleInfoChip(telemetry: telemetry),
+                ],
+              ],
+            ),
           ),
 
           // Bottom panel

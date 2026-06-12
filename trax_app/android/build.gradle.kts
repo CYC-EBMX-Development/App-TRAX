@@ -43,6 +43,15 @@ subprojects {
                 targetCompatibility = JavaVersion.VERSION_17
             }
         }
+        // Some plugins (e.g. universal_ble) reset compileOptions back to
+        // Java 1.8 inside their own afterEvaluate, breaking JVM target
+        // consistency. Re-apply Java 17 via the AGP DSL finalize hook so
+        // we win the last write before AGP locks the DSL.
+        extensions.findByType<com.android.build.api.variant.LibraryAndroidComponentsExtension>()
+            ?.finalizeDsl { dsl ->
+                dsl.compileOptions.sourceCompatibility = JavaVersion.VERSION_17
+                dsl.compileOptions.targetCompatibility = JavaVersion.VERSION_17
+            }
     }
 }
 

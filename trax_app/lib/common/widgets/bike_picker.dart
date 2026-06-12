@@ -45,6 +45,19 @@ class _BikePickerTileState extends State<BikePickerTile> {
     if (_bikes == null) _load();
   }
 
+  @override
+  void didUpdateWidget(covariant BikePickerTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Parent pages often fetch bikes asynchronously after first build.
+    // Keep local cache in sync when a concrete list is provided later.
+    if (!identical(oldWidget.bikes, widget.bikes)) {
+      _bikes = widget.bikes;
+      if (_bikes == null) {
+        _load();
+      }
+    }
+  }
+
   Future<void> _load() async {
     final resp = await TraxApi.getUserBikes();
     if (!mounted || !resp.isSuccess()) return;

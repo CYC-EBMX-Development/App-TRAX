@@ -12,6 +12,7 @@ import '../utils/amap_adapter.dart';
 import '../utils/chaser_dot_icon.dart';
 import '../utils/map_gesture_recognizers.dart';
 import '../utils/map_region.dart';
+import '../utils/map_styles.dart';
 import '../utils/polyline_chaser.dart';
 import '../utils/start_end_marker_icons.dart';
 import '../utils/start_end_marker_icons_amap.dart';
@@ -231,13 +232,26 @@ class _RoutePreviewMapState extends State<RoutePreviewMap> {
         zoom: 14,
       ),
       polylines: {
-        if (pts.length >= 2)
+        if (pts.length >= 2) ...[
+          // Trail mode (routeColor == null): halo + main line for the
+          // Strava-outlined look. Ride mode (routeColor != null): single
+          // thinner red ride-track polyline, no halo.
+          if (widget.routeColor == null)
+            gmap.Polyline(
+              polylineId: const gmap.PolylineId('route_halo'),
+              points: pts,
+              color: MapStyles.trailHaloColor,
+              width: MapStyles.trailHaloWidth,
+            ),
           gmap.Polyline(
             polylineId: const gmap.PolylineId('route'),
             points: pts,
-            color: widget.routeColor ?? AppColors.primary,
-            width: 4,
+            color: widget.routeColor ?? MapStyles.trailColor,
+            width: widget.routeColor == null
+                ? MapStyles.trailWidth
+                : MapStyles.rideTrackWidth,
           ),
+        ],
       },
       markers: markers,
       myLocationEnabled: widget.myLocationEnabled,
@@ -286,8 +300,21 @@ class _RoutePreviewMapState extends State<RoutePreviewMap> {
       apiKey: AmapAdapter.apiKey(),
       initialCameraPosition: AmapAdapter.initialCamera(pts, zoom: 14),
       polylines: {
-        if (pts.length >= 2)
-          AmapAdapter.routePolyline(pts, color: widget.routeColor),
+        if (pts.length >= 2) ...[
+          if (widget.routeColor == null)
+            AmapAdapter.routePolyline(
+              pts,
+              color: MapStyles.trailHaloColor,
+              width: MapStyles.trailHaloWidth,
+            ),
+          AmapAdapter.routePolyline(
+            pts,
+            color: widget.routeColor ?? MapStyles.trailColor,
+            width: widget.routeColor == null
+                ? MapStyles.trailWidth
+                : MapStyles.rideTrackWidth,
+          ),
+        ],
       },
       markers: markers,
       scrollGesturesEnabled: widget.gesturesEnabled,

@@ -12,13 +12,13 @@
 # 环境变量：
 #   PHONE_IP=192.168.31.79  默认 WiFi IP（手机断网/换网后请覆盖此变量）
 #   USB_SERIAL=R9AS8J5AQYW  USB 临时连接时的序列号
-#   PKG=com.trax.trax_app
+#   PKG=com.cycmotor.trax
 
 set -e
 
 PHONE_IP="${PHONE_IP:-192.168.31.79}"
 USB_SERIAL="${USB_SERIAL:-R9AS8J5AQYW}"
-PKG="${PKG:-com.trax.trax_app}"
+PKG="${PKG:-com.cycmotor.trax}"
 DEVICE="${PHONE_IP}:5555"
 # 加载 ~/trax-deploy.env（含 AMAP_KEY 等敏感配置；不入 git）
 if [[ -f "$HOME/trax-deploy.env" ]]; then

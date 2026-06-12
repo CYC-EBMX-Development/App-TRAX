@@ -3,9 +3,12 @@ package com.trax.service;
 import com.trax.dto.BicycleDto;
 import com.trax.model.*;
 import com.trax.repository.*;
+import com.trax.websocket.ModuleImuWebSocketHandler;
+import com.trax.websocket.ModuleTelemetryWebSocketHandler;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -22,6 +25,8 @@ public class BicycleService {
     private final HistoryBicycleRepository historyBicycleRepository;
     private final HistoryRideRecordRepository historyRideRecordRepository;
     private final HistoryRidePointRepository historyRidePointRepository;
+    private final ModuleTelemetryWebSocketHandler telemetryWs;
+    private final ModuleImuWebSocketHandler imuWs;
 
     public BicycleService(BicycleRepository bicycleRepository,
                          UserRepository userRepository,
@@ -31,7 +36,9 @@ public class BicycleService {
                          RidePointRepository ridePointRepository,
                          HistoryBicycleRepository historyBicycleRepository,
                          HistoryRideRecordRepository historyRideRecordRepository,
-                         HistoryRidePointRepository historyRidePointRepository) {
+                         HistoryRidePointRepository historyRidePointRepository,
+                         ModuleTelemetryWebSocketHandler telemetryWs,
+                         ModuleImuWebSocketHandler imuWs) {
         this.bicycleRepository = bicycleRepository;
         this.userRepository = userRepository;
         this.bikeModelRepository = bikeModelRepository;
@@ -41,6 +48,8 @@ public class BicycleService {
         this.historyBicycleRepository = historyBicycleRepository;
         this.historyRideRecordRepository = historyRideRecordRepository;
         this.historyRidePointRepository = historyRidePointRepository;
+        this.telemetryWs = telemetryWs;
+        this.imuWs = imuWs;
     }
 
     public BicycleDto createBike(Long userId, BicycleDto dto) {
@@ -60,11 +69,33 @@ public class BicycleService {
 
         // Bind TRA-X module if provided
         if (dto.getTraxSerialNumber() != null && !dto.getTraxSerialNumber().isEmpty()) {
+            // P0a: enforce serial uniqueness at the bicycles table — the
+            // trax_module registry path below only fires when the module is
+            // pre-registered, but the serial is still written via
+            // mapDtoToBicycle regardless. Without this guard two bikes can
+            // claim the same serial and the WS handshake query throws
+            // NonUniqueResultException → "Connecting…" forever.
+            // Bike has not been persisted yet — any existing row with this
+            // serial is by definition another bike.
+            boolean taken = !bicycleRepository.findByTraxSerialNumber(dto.getTraxSerialNumber()).isEmpty();
+            if (taken) {
+                throw new IllegalStateException(
+                        "Module " + dto.getTraxSerialNumber() + " is already bound to another bike");
+            }
             Optional<TraxModule> module = traxModuleRepository.findBySerialNo(dto.getTraxSerialNumber());
             if (module.isPresent()) {
-                bicycle.setModule(module.get());
-                module.get().setBound(true);
-                traxModuleRepository.save(module.get());
+                TraxModule m = module.get();
+                // P0a: reject duplicate binding so two bikes (potentially owned
+                // by different users) cannot share the same module SN — prevents
+                // telemetry cross-leakage and ride-attribution mix-ups.
+                if (m.isBound()) {
+                    throw new IllegalStateException(
+                            "Module " + dto.getTraxSerialNumber() + " is already bound to another bike");
+                }
+                bicycle.setModule(m);
+                m.setBound(true);
+                m.setBoundAt(LocalDateTime.now()); // P1: telemetry read filter boundary
+                traxModuleRepository.save(m);
             }
         }
 
@@ -100,20 +131,39 @@ public class BicycleService {
             Optional<TraxModule> oldModule = traxModuleRepository.findBySerialNo(oldTraxSerialNumber);
             if (oldModule.isPresent()) {
                 oldModule.get().setBound(false);
+                oldModule.get().setBoundAt(null);
                 traxModuleRepository.save(oldModule.get());
             }
             bicycle.setModule(null);
+            // Kick any live WS subscribers — the old owner must not continue to
+            // receive telemetry for a module that’s no longer theirs.
+            telemetryWs.closeSerial(oldTraxSerialNumber);
+            imuWs.closeSerial(oldTraxSerialNumber);
         }
 
         if (newTraxSerialNumber != null && !newTraxSerialNumber.isEmpty() &&
                 (oldTraxSerialNumber == null || oldTraxSerialNumber.isEmpty() ||
                         !oldTraxSerialNumber.equals(newTraxSerialNumber))) {
+            // P0a: bicycles-table uniqueness guard — see createBike.
+            final Long currentBikeId = bicycle.getId();
+            boolean taken = bicycleRepository.findByTraxSerialNumber(newTraxSerialNumber).stream()
+                    .anyMatch(b -> !currentBikeId.equals(b.getId()));
+            if (taken) {
+                throw new IllegalStateException(
+                        "Module " + newTraxSerialNumber + " is already bound to another bike");
+            }
             // Bind new module
             Optional<TraxModule> newModule = traxModuleRepository.findBySerialNo(newTraxSerialNumber);
             if (newModule.isPresent()) {
-                newModule.get().setBound(true);
-                traxModuleRepository.save(newModule.get());
-                bicycle.setModule(newModule.get());
+                TraxModule m = newModule.get();
+                if (m.isBound()) {
+                    throw new IllegalStateException(
+                            "Module " + newTraxSerialNumber + " is already bound to another bike");
+                }
+                m.setBound(true);
+                m.setBoundAt(LocalDateTime.now());
+                traxModuleRepository.save(m);
+                bicycle.setModule(m);
             }
         }
 
@@ -154,8 +204,11 @@ public class BicycleService {
             Optional<TraxModule> module = traxModuleRepository.findBySerialNo(bicycle.getTraxSerialNumber());
             if (module.isPresent()) {
                 module.get().setBound(false);
+                module.get().setBoundAt(null);
                 traxModuleRepository.save(module.get());
             }
+            telemetryWs.closeSerial(bicycle.getTraxSerialNumber());
+            imuWs.closeSerial(bicycle.getTraxSerialNumber());
         }
 
         // 4. Delete original bicycle

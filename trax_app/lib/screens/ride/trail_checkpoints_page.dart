@@ -10,6 +10,7 @@ import '../../common/utils/start_end_marker_icons.dart';
 import '../../common/widgets/page_code_badge.dart';
 import '../../common/widgets/trax_refresh_button.dart';
 import '../../models/user_checkpoint.dart';
+import '../../common/utils/map_styles.dart';
 import '../../theme/app_theme.dart';
 
 /// Standalone editor for the current user's checkpoints on a single trail.
@@ -394,13 +395,20 @@ class _TrailCheckpointsPageState extends State<TrailCheckpointsPage> {
         if (_trailRoute.isNotEmpty) _fitTrailBounds(_trailRoute);
       },
       polylines: {
-        if (_trailRoute.length >= 2)
+        if (_trailRoute.length >= 2) ...[
           Polyline(
-            polylineId: const PolylineId('trail'),
-            color: AppColors.primary,
-            width: 4,
+            polylineId: const PolylineId('trail_halo'),
+            color: MapStyles.trailHaloColor,
+            width: MapStyles.trailHaloWidth,
             points: _trailRoute,
           ),
+          Polyline(
+            polylineId: const PolylineId('trail'),
+            color: MapStyles.trailColor,
+            width: MapStyles.trailWidth,
+            points: _trailRoute,
+          ),
+        ],
       },
       markers: {
         if (_trailRoute.isNotEmpty)

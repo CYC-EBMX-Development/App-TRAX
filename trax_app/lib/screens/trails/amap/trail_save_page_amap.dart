@@ -7,6 +7,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart' show LatLng;
 import '../../../common/services/map_service.dart';
 import '../../../common/network/trax_api.dart';
 import '../../../common/utils/amap_adapter.dart';
+import '../../../common/utils/map_styles.dart';
 import '../../../theme/app_theme.dart';
 
 /// AMap variant of [TrailSavePage]. Visual UX parity with the Google
@@ -181,7 +182,13 @@ class _TrailSavePageAmapState extends State<TrailSavePageAmap> {
       privacyStatement: AmapAdapter.privacy(),
       apiKey: AmapAdapter.apiKey(),
       initialCameraPosition: AmapAdapter.initialCamera(widget.route, zoom: 14),
-      polylines: {AmapAdapter.routePolyline(widget.route)},
+      polylines: {
+        AmapAdapter.routePolyline(widget.route,
+            color: MapStyles.trailHaloColor,
+            width: MapStyles.trailHaloWidth),
+        AmapAdapter.routePolyline(widget.route,
+            color: MapStyles.trailColor),
+      },
       markers: AmapAdapter.startFinishMarkers(widget.route),
       scrollGesturesEnabled: true,
       zoomGesturesEnabled: true,

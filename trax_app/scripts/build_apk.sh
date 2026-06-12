@@ -20,7 +20,26 @@ source "$APP_ROOT/scripts/release_naming.sh"
 API_BASE_URL="${API_BASE_URL:-http://43.99.48.204/api}"
 AMAP_KEY="${AMAP_KEY:-}"
 DEPLOY=false
-[[ "${1:-}" == "--deploy" ]] && DEPLOY=true
+# Distribution builds (APK on OTA / APK shared to others) must NEVER prefill the
+# login email — that is a sideload-only convenience. Opt in explicitly with
+# `--dev-email` (uses $DEV_DEFAULT_EMAIL from env) or `--dev-email <addr>`.
+INCLUDE_DEV_EMAIL=false
+DEV_EMAIL_OVERRIDE=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --deploy) DEPLOY=true; shift ;;
+    --dev-email)
+      INCLUDE_DEV_EMAIL=true
+      if [[ -n "${2:-}" && "$2" != --* ]]; then DEV_EMAIL_OVERRIDE="$2"; shift; fi
+      shift ;;
+    *) shift ;;
+  esac
+done
+if $INCLUDE_DEV_EMAIL; then
+  EFFECTIVE_DEV_EMAIL="${DEV_EMAIL_OVERRIDE:-${DEV_DEFAULT_EMAIL:-}}"
+else
+  EFFECTIVE_DEV_EMAIL=""
+fi
 
 # Use shared release sequence with code snapshot awareness.
 if [[ -f "$HOME/trax-deploy.env" ]]; then
@@ -46,6 +65,7 @@ env -u FLUTTER_STORAGE_BASE_URL -u PUB_HOSTED_URL \
       --dart-define=AMAP_KEY="$AMAP_KEY" \
       --dart-define=AMAP_ANDROID_SDK_KEY="${AMAP_ANDROID_SDK_KEY:-}" \
       --dart-define=AMAP_IOS_SDK_KEY="${AMAP_IOS_SDK_KEY:-}" \
+      --dart-define=DEV_DEFAULT_EMAIL="$EFFECTIVE_DEV_EMAIL" \
       --build-name="1.0.0" \
       --build-number="${DATE_STAMP}${SEQ}"
 

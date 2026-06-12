@@ -1,11 +1,14 @@
 import 'dart:async';
 
 import 'package:amap_flutter_map/amap_flutter_map.dart';
+import 'package:amap_flutter_base/amap_flutter_base.dart' as amap;
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart' show LatLng;
 import 'package:trax_app/common/widgets/page_code_badge.dart';
 
 import '../../../common/utils/amap_adapter.dart';
+import '../../../common/utils/map_styles.dart';
+import '../../../common/utils/replay_resample.dart';
 import '../../../common/utils/avatar_marker_icons_amap.dart';
 import '../../../common/global/global_user_info.dart';
 import '../../../common/widgets/trax_refresh_button.dart';
@@ -52,6 +55,54 @@ class _RideReplayPageAmapState extends State<RideReplayPageAmap> {
   // Self-avatar marker for the replay dot.
   BitmapDescriptor? _riderIcon;
 
+  /// Points used to frame the camera on load. For a lap-timer ride (has
+  /// laps) we frame only the lap-timed portion (the trail), excluding any
+  /// warm-up / cool-down riding. For a free ride (no laps) we frame the
+  /// entire recorded track.
+  List<LatLng> _trackForFit() {
+    if (widget.laps.isEmpty) return _positions;
+    final start = widget.laps.first.startTime;
+    final end = widget.laps.last.endTime;
+    if (start == null || end == null) return _positions;
+    final n = _positions.length < _timestamps.length
+        ? _positions.length
+        : _timestamps.length;
+    final sub = <LatLng>[];
+    for (int i = 0; i < n; i++) {
+      final t = _timestamps[i];
+      if (!t.isBefore(start) && !t.isAfter(end)) sub.add(_positions[i]);
+    }
+    return sub.length >= 2 ? sub : _positions;
+  }
+
+  /// Fit the camera to the relevant geometry on load (trail for a lap-timer
+  /// ride, full route for a free ride).
+  void _fitToTrack() {
+    final ctrl = _mapController;
+    if (ctrl == null || _positions.isEmpty) return;
+    final pts = _trackForFit();
+    if (pts.length == 1) {
+      ctrl.moveCamera(
+          CameraUpdate.newLatLngZoom(AmapAdapter.toAmap(pts.first), 16));
+      return;
+    }
+    double minLat = pts.first.latitude, maxLat = pts.first.latitude;
+    double minLng = pts.first.longitude, maxLng = pts.first.longitude;
+    for (final p in pts) {
+      if (p.latitude < minLat) minLat = p.latitude;
+      if (p.latitude > maxLat) maxLat = p.latitude;
+      if (p.longitude < minLng) minLng = p.longitude;
+      if (p.longitude > maxLng) maxLng = p.longitude;
+    }
+    ctrl.moveCamera(CameraUpdate.newLatLngBounds(
+      amap.LatLngBounds(
+        southwest: AmapAdapter.toAmap(LatLng(minLat, minLng)),
+        northeast: AmapAdapter.toAmap(LatLng(maxLat, maxLng)),
+      ),
+      48,
+    ));
+  }
+
   @override
   void initState() {
     super.initState();
@@ -81,17 +132,27 @@ class _RideReplayPageAmapState extends State<RideReplayPageAmap> {
   }
 
   void _parsePoints() {
-    _positions = [];
-    _timestamps = [];
-    _speeds = [];
+    final positions = <LatLng>[];
+    final timestamps = <DateTime>[];
+    final speeds = <double>[];
     for (final p in widget.points) {
-      _positions.add(LatLng(
+      positions.add(LatLng(
         (p['latitude'] as num).toDouble(),
         (p['longitude'] as num).toDouble(),
       ));
-      _timestamps.add(DateTime.parse(p['timestamp'] as String));
-      _speeds.add((p['speed'] as num?)?.toDouble() ?? 0);
+      timestamps.add(DateTime.parse(p['timestamp'] as String));
+      speeds.add((p['speed'] as num?)?.toDouble() ?? 0);
     }
+    // Resample onto a fixed 200ms grid: one point per 200ms, sparse 1s gaps
+    // split into 5 interpolated sub-points along the straight line.
+    final resampled = resampleReplayTrack(
+      route: positions,
+      times: timestamps,
+      speeds: speeds,
+    );
+    _positions = resampled.route;
+    _timestamps = resampled.times ?? timestamps;
+    _speeds = resampled.speeds;
   }
 
   void _play() {
@@ -111,10 +172,9 @@ class _RideReplayPageAmapState extends State<RideReplayPageAmap> {
       setState(() => _isPlaying = false);
       return;
     }
-    final dt = _timestamps[_currentIndex + 1]
-        .difference(_timestamps[_currentIndex])
-        .inMilliseconds;
-    final delay = (dt / _speed).clamp(16, 5000).toInt();
+    // Fixed 200ms cadence (scaled by _speed); points are already resampled
+    // to a 200ms grid in _parsePoints.
+    final delay = (200 / _speed).clamp(16, 4000).toInt();
     _timer?.cancel();
     _timer = Timer(Duration(milliseconds: delay), () {
       if (!mounted || !_isPlaying) return;
@@ -227,15 +287,21 @@ class _RideReplayPageAmapState extends State<RideReplayPageAmap> {
                     if (remaining.length >= 2)
                       Polyline(
                         points: AmapAdapter.toAmapList(remaining),
-                        color: AppColors.primary.withValues(alpha: 0.25),
-                        width: 6,
+                        color: MapStyles.trailColor.withValues(alpha: 0.25),
+                        width: MapStyles.trailWidth.toDouble(),
                       ),
-                    if (traversed.length >= 2)
+                    if (traversed.length >= 2) ...[
                       Polyline(
                         points: AmapAdapter.toAmapList(traversed),
-                        color: AppColors.primary,
-                        width: 8,
+                        color: MapStyles.trailHaloColor,
+                        width: MapStyles.trailHaloWidth.toDouble(),
                       ),
+                      Polyline(
+                        points: AmapAdapter.toAmapList(traversed),
+                        color: MapStyles.trailColor,
+                        width: MapStyles.trailWidth.toDouble(),
+                      ),
+                    ],
                   },
                   markers: {
                     if (trailStart != null)
@@ -252,64 +318,17 @@ class _RideReplayPageAmapState extends State<RideReplayPageAmap> {
                       ),
                     ),
                   },
-                  onMapCreated: (c) => _mapController = c,
+                  onMapCreated: (c) {
+                    _mapController = c;
+                    WidgetsBinding.instance
+                        .addPostFrameCallback((_) => _fitToTrack());
+                  },
                 ),
                 Positioned(
                   top: MediaQuery.of(context).padding.top + 8,
                   left: 12,
-                  right: 12,
-                  child: Row(
-                    children: [
-                      _circleBtn(Icons.arrow_back,
-                          () => Navigator.of(context).pop()),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(22),
-                            boxShadow: [
-                              BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.1),
-                                  blurRadius: 6),
-                            ],
-                          ),
-                          child: Row(
-                            children: [
-                              const Icon(Icons.replay,
-                                  size: 18, color: AppColors.primary),
-                              const SizedBox(width: 6),
-                              Expanded(
-                                child: Text(
-                                  widget.rideName,
-                                  style: const TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 3),
-                                decoration: BoxDecoration(
-                                  color: AppColors.primary
-                                      .withValues(alpha: 0.12),
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: const Text('AMap',
-                                    style: TextStyle(
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w700,
-                                        color: AppColors.primary)),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                  child: _circleBtn(Icons.arrow_back,
+                      () => Navigator.of(context).pop()),
                 ),
               ],
             ),

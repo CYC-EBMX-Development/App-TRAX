@@ -9,6 +9,8 @@ import '../../common/utils/avatar_marker_icons.dart';
 import '../../common/global/global_user_info.dart';
 import '../../models/ride_lap.dart';
 import '../../common/widgets/trax_refresh_button.dart';
+import '../../common/utils/map_styles.dart';
+import '../../common/utils/replay_resample.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/lap_splits_grid.dart';
 import 'package:trax_app/common/widgets/page_code_badge.dart';
@@ -76,17 +78,27 @@ class _RideReplayPageState extends State<RideReplayPage> {
   }
 
   void _parsePoints() {
-    _positions = [];
-    _timestamps = [];
-    _speeds = [];
+    final positions = <LatLng>[];
+    final timestamps = <DateTime>[];
+    final speeds = <double>[];
     for (final p in widget.points) {
-      _positions.add(LatLng(
+      positions.add(LatLng(
         (p['latitude'] as num).toDouble(),
         (p['longitude'] as num).toDouble(),
       ));
-      _timestamps.add(DateTime.parse(p['timestamp'] as String));
-      _speeds.add((p['speed'] as num?)?.toDouble() ?? 0);
+      timestamps.add(DateTime.parse(p['timestamp'] as String));
+      speeds.add((p['speed'] as num?)?.toDouble() ?? 0);
     }
+    // Resample onto a fixed 200ms grid: one point per 200ms, sparse 1s gaps
+    // split into 5 interpolated sub-points along the straight line.
+    final resampled = resampleReplayTrack(
+      route: positions,
+      times: timestamps,
+      speeds: speeds,
+    );
+    _positions = resampled.route;
+    _timestamps = resampled.times ?? timestamps;
+    _speeds = resampled.speeds;
   }
 
   void _play() {
@@ -109,11 +121,9 @@ class _RideReplayPageState extends State<RideReplayPage> {
       return;
     }
 
-    // Calculate delay based on real time difference between points
-    final dt = _timestamps[_currentIndex + 1]
-        .difference(_timestamps[_currentIndex])
-        .inMilliseconds;
-    final delay = (dt / _speed).clamp(16, 5000).toInt(); // min 16ms, max 5s
+    // Fixed 200ms cadence (scaled by _speed); points are already resampled
+    // to a 200ms grid in _parsePoints.
+    final delay = (200 / _speed).clamp(16, 4000).toInt();
 
     _timer?.cancel();
     _timer = Timer(Duration(milliseconds: delay), () {
@@ -148,6 +158,53 @@ class _RideReplayPageState extends State<RideReplayPage> {
       _timer?.cancel();
       _scheduleNext();
     }
+  }
+
+  /// Points used to frame the camera on load. For a lap-timer ride (has
+  /// laps) we frame only the lap-timed portion (the trail), excluding any
+  /// warm-up / cool-down riding. For a free ride (no laps) we frame the
+  /// entire recorded track.
+  List<LatLng> _trackForFit() {
+    if (widget.laps.isEmpty) return _positions;
+    final start = widget.laps.first.startTime;
+    final end = widget.laps.last.endTime;
+    if (start == null || end == null) return _positions;
+    final n = _positions.length < _timestamps.length
+        ? _positions.length
+        : _timestamps.length;
+    final sub = <LatLng>[];
+    for (int i = 0; i < n; i++) {
+      final t = _timestamps[i];
+      if (!t.isBefore(start) && !t.isAfter(end)) sub.add(_positions[i]);
+    }
+    return sub.length >= 2 ? sub : _positions;
+  }
+
+  /// Fit the camera to the relevant geometry on load (trail for a lap-timer
+  /// ride, full route for a free ride).
+  void _fitToTrack() {
+    final ctrl = _mapController;
+    if (ctrl == null || _positions.isEmpty) return;
+    final pts = _trackForFit();
+    if (pts.length == 1) {
+      ctrl.moveCamera(CameraUpdate.newLatLngZoom(pts.first, 16));
+      return;
+    }
+    double minLat = pts.first.latitude, maxLat = pts.first.latitude;
+    double minLng = pts.first.longitude, maxLng = pts.first.longitude;
+    for (final p in pts) {
+      if (p.latitude < minLat) minLat = p.latitude;
+      if (p.latitude > maxLat) maxLat = p.latitude;
+      if (p.longitude < minLng) minLng = p.longitude;
+      if (p.longitude > maxLng) maxLng = p.longitude;
+    }
+    ctrl.moveCamera(CameraUpdate.newLatLngBounds(
+      LatLngBounds(
+        southwest: LatLng(minLat, minLng),
+        northeast: LatLng(maxLat, maxLng),
+      ),
+      48,
+    ));
   }
 
   void _animateToCurrentPos() {
@@ -240,16 +297,23 @@ class _RideReplayPageState extends State<RideReplayPage> {
                       Polyline(
                         polylineId: const PolylineId('remaining'),
                         points: remaining,
-                        color: AppColors.primary.withValues(alpha: 0.25),
-                        width: 4,
+                        color: MapStyles.trailColor.withValues(alpha: 0.25),
+                        width: MapStyles.trailWidth,
                       ),
-                    if (traversed.length >= 2)
+                    if (traversed.length >= 2) ...[
+                      Polyline(
+                        polylineId: const PolylineId('traversed_halo'),
+                        points: traversed,
+                        color: MapStyles.trailHaloColor,
+                        width: MapStyles.trailHaloWidth,
+                      ),
                       Polyline(
                         polylineId: const PolylineId('traversed'),
                         points: traversed,
-                        color: AppColors.primary,
-                        width: 5,
+                        color: MapStyles.trailColor,
+                        width: MapStyles.trailWidth,
                       ),
+                    ],
                   },
                   markers: {
                     if (_trailStartPoint() != null)
@@ -279,6 +343,8 @@ class _RideReplayPageState extends State<RideReplayPage> {
                   onMapCreated: (c) {
                     _mapController = c;
                     _mapReady = true;
+                    WidgetsBinding.instance
+                        .addPostFrameCallback((_) => _fitToTrack());
                   },
                 ),
 
@@ -286,38 +352,8 @@ class _RideReplayPageState extends State<RideReplayPage> {
                 Positioned(
                   top: MediaQuery.of(context).padding.top + 8,
                   left: 12,
-                  right: 12,
-                  child: Row(
-                    children: [
-                      _circleBtn(Icons.arrow_back, () => Navigator.of(context).pop()),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(22),
-                            boxShadow: [
-                              BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 6),
-                            ],
-                          ),
-                          child: Row(
-                            children: [
-                              const Icon(Icons.replay, size: 18, color: AppColors.primary),
-                              const SizedBox(width: 6),
-                              Expanded(
-                                child: Text(
-                                  widget.rideName,
-                                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                  child: _circleBtn(
+                      Icons.arrow_back, () => Navigator.of(context).pop()),
                 ),
               ],
             ),

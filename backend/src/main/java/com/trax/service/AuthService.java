@@ -92,8 +92,33 @@ public class AuthService {
     }
 
     private LoginData buildLoginData(User user) {
-        String token = jwtUtil.generateToken(user.getEmail());
+        String accessToken = jwtUtil.generateToken(user.getEmail());
+        String refreshToken = jwtUtil.generateRefreshToken(user.getEmail());
         UserDto userDto = new UserDto(user.getId(), user.getName(), user.getEmail(), AvatarUrls.versioned(user));
-        return new LoginData(token, "Bearer", userDto);
+        return new LoginData(accessToken, refreshToken, "Bearer", userDto);
+    }
+
+    /**
+     * Exchange a still-valid refresh token for a fresh (access, refresh)
+     * pair. The old refresh token is implicitly discarded — callers must
+     * persist the new one. Stateless: no DB lookup, signature + expiry
+     * + {@code type=refresh} claim are the sole gate.
+     *
+     * @throws RuntimeException with HTTP-401-ish semantics when the token
+     *         is missing, malformed, expired, signed with the wrong key,
+     *         or carries the wrong type claim. The caller (Spring
+     *         ControllerAdvice) maps this to a 401 response body.
+     */
+    public LoginData refreshAccessToken(String refreshToken) {
+        if (refreshToken == null || refreshToken.isBlank()) {
+            throw new RuntimeException("Missing refresh token");
+        }
+        if (!jwtUtil.validateToken(refreshToken) || !jwtUtil.isRefreshToken(refreshToken)) {
+            throw new RuntimeException("Invalid or expired refresh token");
+        }
+        String email = jwtUtil.extractEmail(refreshToken);
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new RuntimeException("Account not found"));
+        return buildLoginData(user);
     }
 }

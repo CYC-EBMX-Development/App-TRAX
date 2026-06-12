@@ -22,6 +22,7 @@ class TraxUrl {
   static const String verifyEmail = '/auth/verify-email';
   static const String registerByPwd = '/auth/registerByPwd';
   static const String resetPassword = '/auth/reset-password';
+  static const String refreshToken = '/auth/refresh';
   static const String loginWithGoogle = '/sdk/googleLogin';
   static const String loginWithFacebook = '/sdk/facebookLogin';
   static const String loginWithApple = '/sdk/appleLogin';
@@ -49,6 +50,12 @@ class TraxApi {
   static late Dio _dio;
   static late bool _isDebug;
 
+  /// Currently-active HTTP API base URL (e.g. "http://43.99.48.204/api").
+  /// Exposed so non-Dio clients (WebSocket, etc.) can derive their URLs
+  /// from the same configuration source.
+  static String get activeBaseUrl =>
+      _isDebug ? TraxUrl.baseUrlDebug : TraxUrl.baseUrlRelease;
+
   static void init({required bool isDebug}) {
     _isDebug = isDebug;
     _dio = Dio(
@@ -61,7 +68,7 @@ class TraxApi {
       ),
     );
     _dio.interceptors.addAll([
-      AppTokenInterceptor(),
+      AppTokenInterceptor(_dio),
     ]);
   }
 
@@ -176,6 +183,38 @@ class TraxApi {
     return post(TraxUrl.loginWithPasswd, data: {'username': username, 'password': password}, headers: _TraxContentType.jsonHeaders);
   }
 
+  /// Exchange a refresh token for a freshly-rotated (access, refresh)
+  /// pair. Uses a **separate Dio instance with NO interceptors** so that
+  /// a 401 here cannot recurse back into `AppTokenInterceptor`. No loading
+  /// dialog \u2014 this is a silent background call invoked from the
+  /// interceptor itself. Returns the raw [AppResponse]; the caller is
+  /// responsible for parsing `LoginModel.fromJson(response.data)` and
+  /// persisting the new tokens via `TraxStorageUtil`.
+  static Future<AppResponse> refreshToken({required String refreshToken}) async {
+    final bareDio = Dio(
+      BaseOptions(
+        baseUrl: activeBaseUrl,
+        connectTimeout: const Duration(seconds: 15),
+        receiveTimeout: const Duration(seconds: 15),
+        headers: _TraxContentType.jsonHeaders,
+        responseType: ResponseType.json,
+      ),
+    );
+    try {
+      final resp = await bareDio.post(
+        TraxUrl.refreshToken,
+        data: {'refreshToken': refreshToken},
+      );
+      return AppResponse.fromJson(resp.data);
+    } on DioException catch (e) {
+      return AppResponse.error(_formatDioError(e));
+    } catch (e) {
+      return AppResponse.error(e.toString());
+    } finally {
+      bareDio.close(force: true);
+    }
+  }
+
   static Future<AppResponse> sendCode({required String email}) {
     return post(TraxUrl.sendCode, data: {'email': email});
   }
@@ -242,6 +281,18 @@ class TraxApi {
 
   static Future<AppResponse> getTraxModules() =>
       get(TraxUrl.traxModules, showLoading: false);
+
+  /// Given a list of serials surfaced by a BLE scan, returns the subset that
+  /// is already bound to a bicycle (any owner). Used to mark scan results
+  /// with a "locked" badge.
+  static Future<AppResponse> checkBoundSerials(List<String> serials) =>
+      post(
+        TraxUrl.traxModules,
+        path: '/check-bound',
+        data: {'serials': serials},
+        showLoading: false,
+        headers: _TraxContentType.jsonHeaders,
+      );
 
   // ── User profile endpoints ────────────────────────────
 
@@ -507,26 +558,16 @@ class TraxApi {
   static Future<AppResponse> getModuleTelemetry(String serialNo) =>
       get(TraxUrl.modules, path: '/$serialNo/telemetry/latest', showLoading: false);
 
-  static Future<AppResponse> startSimulation(String serialNo, {double? latitude, double? longitude, int? rideId}) {
-    final params = 'serialNo=$serialNo';
-    final latParam = latitude != null ? '&latitude=$latitude' : '';
-    final lngParam = longitude != null ? '&longitude=$longitude' : '';
-    final rideParam = rideId != null ? '&rideId=$rideId' : '';
-    return post(TraxUrl.modules, path: '/simulate/start?$params$latParam$lngParam$rideParam',
-        data: {}, showLoading: false);
-  }
-
-  static Future<AppResponse> pauseSimulation(String serialNo) =>
-      post(TraxUrl.modules, path: '/simulate/pause?serialNo=$serialNo',
-          data: {}, showLoading: false);
-
-  static Future<AppResponse> resumeSimulation(String serialNo) =>
-      post(TraxUrl.modules, path: '/simulate/resume?serialNo=$serialNo',
-          data: {}, showLoading: false);
-
-  static Future<AppResponse> stopSimulation(String serialNo) =>
-      post(TraxUrl.modules, path: '/simulate/stop?serialNo=$serialNo',
-          data: {}, showLoading: false);
+  /// Bulk-upload NMEA $PCYCGPS lines captured from a module over BLE
+  /// (offline-module path). Server dedups by (serial, ts), so the App
+  /// may safely retry the same batch on failure.
+  static Future<AppResponse> addModuleTelemetryBatch(
+          String serialNo, List<String> nmeaLines) =>
+      post(TraxUrl.modules,
+          path: '/$serialNo/telemetry/batch',
+          data: {'nmea': nmeaLines},
+          headers: _TraxContentType.jsonHeaders,
+          showLoading: false);
 
   // ── Race endpoints ─────────────────────────────────────
 
@@ -593,6 +634,16 @@ class TraxApi {
           int raceId, double latitude, double longitude) =>
       post(TraxUrl.races,
           path: '/$raceId/location',
+          data: {'latitude': latitude, 'longitude': longitude},
+          headers: _TraxContentType.jsonHeaders, showLoading: false);
+
+  /// Live-map participant position ONLY — does not ingest a ride_point.
+  /// Used while racing when dense GPS sampling is driven by
+  /// ActiveRideService (addRidePoints batch upload).
+  static Future<AppResponse> reportRacePosition(
+          int raceId, double latitude, double longitude) =>
+      post(TraxUrl.races,
+          path: '/$raceId/position',
           data: {'latitude': latitude, 'longitude': longitude},
           headers: _TraxContentType.jsonHeaders, showLoading: false);
 

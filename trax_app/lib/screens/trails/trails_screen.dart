@@ -16,6 +16,7 @@ import '../../common/network/trax_api.dart';
 import '../../common/network/app_response.dart';
 import '../../common/services/map_service.dart';
 import '../../common/services/map_provider.dart';
+import '../../common/services/location_service.dart';
 import '../../common/utils/amap_adapter.dart';
 import '../../common/utils/coord_transform.dart';
 import '../../common/utils/trail_thumbnail.dart';
@@ -24,6 +25,7 @@ import '../../common/widgets/map_router.dart';
 import '../../common/widgets/page_code_badge.dart';
 import '../../models/ebike.dart';
 import '../../models/trail.dart';
+import '../../common/utils/map_styles.dart';
 import '../../theme/app_theme.dart';
 import '../ride/host_laps_page.dart';
 import '../ride/host_race_page.dart';
@@ -168,37 +170,16 @@ class TrailsScreenState extends State<TrailsScreen>
   }
 
   Future<void> _fetchUserLocation() async {
-    try {
-      var perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied) {
-        perm = await Geolocator.requestPermission();
-      }
-      if (perm == LocationPermission.denied ||
-          perm == LocationPermission.deniedForever) {
-        return;
-      }
-      // Try the cached last-known fix FIRST — returns instantly when the
-      // OS has any prior reading, which is the common case (the user has
-      // used other GPS apps, or just opened the system map). This lets us
-      // pick the right basemap (Google vs AMap) without waiting for a
-      // fresh satellite lock.
-      Position? pos;
-      try {
-        pos = await Geolocator.getLastKnownPosition();
-      } catch (_) {}
-      // Upgrade to a fresh fix only when there's nothing cached, and cap
-      // it so we never block the spinner for more than a few seconds.
-      pos ??= await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.medium,
-          timeLimit: Duration(seconds: 5),
-        ),
-      );
-      if (!mounted) return;
-      setState(() {
-        _userPos = gmap.LatLng(pos!.latitude, pos.longitude);
-      });
-    } catch (_) {}
+    // Dual-source fix (Geolocator + AMap, first wins). AMap is what lets the
+    // map tab locate indoors in mainland China where GMS network-location is
+    // unreachable. Returns WGS-84, matching the rest of the app.
+    final fix = await LocationService.getFix(
+      timeout: const Duration(seconds: 5),
+    );
+    if (!mounted || fix == null) return;
+    setState(() {
+      _userPos = gmap.LatLng(fix.latitude, fix.longitude);
+    });
   }
 
   Future<void> _loadTrails() async {
@@ -234,8 +215,13 @@ class TrailsScreenState extends State<TrailsScreen>
         if (_selectedIdx >= _trails.length) _selectedIdx = 0;
       });
       if (_trails.isNotEmpty) {
-        await _selectTrail(_selectedIdx, animateCamera: true);
+        // Per UX spec: first entry centers on user (zoom 15 ≈ 1 km radius)
+        // via `_centerOnUser` in onMapCreated. Don't yank the camera to
+        // the closest trail — just load its polyline so the highlight
+        // appears on top of the user-centered view.
+        await _selectTrail(_selectedIdx, animateCamera: false);
       }
+      unawaited(_prefetchAllRoutes());
     } else {
       setState(() => _trails = []);
     }
@@ -309,14 +295,28 @@ class TrailsScreenState extends State<TrailsScreen>
       }
     }
     // Keep the previously selected trail in the list if the server dropped it.
-    if (selectedTrail != null && selectedId != null &&
+    // Only do this when the user hasn't actually moved the anchor far — if
+    // they panned/searched into a brand-new region, pinning the old trail
+    // would defeat the whole point of the refresh.
+    final movedFar = old == null
+        ? true
+        : Geolocator.distanceBetween(
+              old.latitude, old.longitude,
+              anchor.latitude, anchor.longitude,
+            ) >
+            2000;
+    if (!movedFar &&
+        selectedTrail != null && selectedId != null &&
         list.indexWhere((t) => t.id == selectedId) < 0) {
       list.add(selectedTrail);
     }
 
     final sorted = _sortByDistance(list, anchor: anchor);
+    // Pick the new selection: if the previously-selected trail is still in
+    // the list AND we haven't moved far, keep it. Otherwise default to the
+    // closest trail to the new anchor (index 0 after distance sort).
     var nextIdx = 0;
-    if (selectedId != null) {
+    if (!movedFar && selectedId != null) {
       final idx = sorted.indexWhere((t) => t.id == selectedId);
       if (idx >= 0) nextIdx = idx;
     }
@@ -332,6 +332,17 @@ class TrailsScreenState extends State<TrailsScreen>
         _cardCtrl.jumpToPage(_selectedIdx);
       }
     }
+    // If the selected trail actually changed, reload its polyline so the
+    // map highlights the new trail instead of the stale previous one.
+    // Skip camera animation — the caller (search / pan) has already
+    // positioned the camera where the user expects.
+    final newSelectedId = sorted.isEmpty ? null : sorted[_selectedIdx].id;
+    if (newSelectedId != null && newSelectedId != selectedId) {
+      await _selectTrail(_selectedIdx, animateCamera: false);
+    }
+    // Make sure every nearby trail has its polyline cached so the map
+    // can draw all of them in dark orange behind the highlighted one.
+    unawaited(_prefetchAllRoutes());
   }
 
   Future<void> _selectTrail(int index, {required bool animateCamera}) async {
@@ -348,9 +359,13 @@ class TrailsScreenState extends State<TrailsScreen>
     }
   }
 
-  /// Handle a tap on one of the per-trail map pins: select the trail,
-  /// slide the bottom card carousel to it, and focus the camera.
-  void _onTrailMarkerTapped(int index) {
+  /// Handle a tap on one of the per-trail map pins or polylines: select
+  /// the trail and slide the bottom card carousel to it. [animateCamera]
+  /// controls whether the map camera re-focuses on the route — `true` for
+  /// marker taps (user expects to be taken to the pin), `false` for
+  /// polyline taps (the polyline is already on screen, zooming would be
+  /// jarring).
+  void _onTrailMarkerTapped(int index, {bool animateCamera = true}) {
     if (index < 0 || index >= _trails.length) return;
     if (_cardCtrl.hasClients) {
       final current = _cardCtrl.page?.round() ?? _selectedIdx;
@@ -363,7 +378,7 @@ class TrailsScreenState extends State<TrailsScreen>
         );
       }
     }
-    _selectTrail(index, animateCamera: true);
+    _selectTrail(index, animateCamera: animateCamera);
   }
 
   Future<List<gmap.LatLng>> _loadTrailRoute(Trail trail) async {
@@ -389,6 +404,29 @@ class TrailsScreenState extends State<TrailsScreen>
     }
     _routeCache[id] = pts;
     return pts;
+  }
+
+  /// Pre-load polylines for every trail in `_trails` so the map can draw
+  /// them all (the selected one in [AppColors.primary], the rest in
+  /// [MapStyles.trailUnselectedColor]). Skips trails whose route is already cached.
+  /// Calls [setState] once when at least one new route lands so the map
+  /// repaints with the freshly-fetched polylines.
+  Future<void> _prefetchAllRoutes() async {
+    final pending = <Trail>[];
+    for (final t in _trails) {
+      final id = t.id;
+      if (id == null || id.isEmpty) continue;
+      if (_routeCache.containsKey(id)) continue;
+      pending.add(t);
+    }
+    if (pending.isEmpty) return;
+    var loaded = 0;
+    await Future.wait(pending.map((t) async {
+      final route = await _loadTrailRoute(t);
+      if (route.isNotEmpty) loaded++;
+    }));
+    if (!mounted || loaded == 0) return;
+    setState(() {});
   }
 
   Future<void> _focusRoute(List<gmap.LatLng> route, Trail trail) async {
@@ -507,18 +545,29 @@ class TrailsScreenState extends State<TrailsScreen>
     if (_userPos == null) {
       await _fetchUserLocation();
     }
-    if (_userPos == null) return;
-    final p = _userPos!;
-    _nearbyAnchor = p;
-    _markProgrammaticCameraMove();
-    if (_provider == MapProvider.google && _gController != null) {
-      await _gController!.animateCamera(gmap.CameraUpdate.newLatLngZoom(p, 16));
+    if (_userPos == null) {
+      if (!mounted) return;
+      showTraxSnackBar(context, 'Unable to get phone GPS signal', isError: true);
       return;
     }
-    if (_provider == MapProvider.amap && _aController != null) {
+    final p = _userPos!;
+    // Move camera first (suppressing the auto onCameraIdle refresh that
+    // would otherwise race with our explicit refresh below). Zoom 15
+    // shows roughly a 1 km radius on a phone screen, matching the
+    // map-tab spec.
+    _markProgrammaticCameraMove();
+    if (_provider == MapProvider.google && _gController != null) {
+      await _gController!.animateCamera(gmap.CameraUpdate.newLatLngZoom(p, 15));
+    } else if (_provider == MapProvider.amap && _aController != null) {
       await _aController!
-          .moveCamera(amap_map.CameraUpdate.newLatLngZoom(AmapAdapter.toAmap(p), 16));
+          .moveCamera(amap_map.CameraUpdate.newLatLngZoom(AmapAdapter.toAmap(p), 15));
     }
+    // Re-pull nearby trails for the user's location. We deliberately do
+    // NOT pre-set `_nearbyAnchor` here — `_refreshNearbyByAnchor`
+    // early-exits when the new anchor is within 120 m of the previous
+    // one, so pre-setting it would self-cancel the refresh whenever the
+    // user taps my-location after panning/searching elsewhere.
+    await _refreshNearbyByAnchor(p);
   }
 
   Future<void> _openSearch() async {
@@ -720,9 +769,20 @@ class TrailsScreenState extends State<TrailsScreen>
             right: 14,
             child: _buildTopBar(),
           ),
-          Positioned(
-            right: 14,
-            top: MediaQuery.of(context).padding.top + 86,
+          // The right-side controls (layers / locate / my-location) must
+          // follow `_detailAnim` smoothly. Without the AnimatedBuilder,
+          // `_rightControlsBottom` is only re-read on setState() —
+          // notably the setState() that fires at the START of
+          // _collapseDetail (when value is still 1.0), which snaps the
+          // buttons to the EXPANDED position and leaves them stuck high
+          // after the sheet animates back down.
+          AnimatedBuilder(
+            animation: _detailAnim,
+            builder: (ctx, child) => Positioned(
+              right: 14,
+              bottom: _rightControlsBottom(context),
+              child: child!,
+            ),
             child: _buildRightControls(),
           ),
           if (_isLoading)
@@ -782,7 +842,11 @@ class TrailsScreenState extends State<TrailsScreen>
                         _suppressPageChange = false;
                         return;
                       }
-                      _selectTrail(idx, animateCamera: true);
+                      // Per UX spec: swiping cards must NOT zoom or pan
+                      // the map; it only re-styles the polylines so the
+                      // newly-selected trail brightens and the rest dim
+                      // to 30% alpha.
+                      _selectTrail(idx, animateCamera: false);
                     },
                     itemBuilder: (_, idx) {
                       final trail = _trails[idx];
@@ -1051,22 +1115,51 @@ class TrailsScreenState extends State<TrailsScreen>
       rotateGesturesEnabled: true,
       padding: EdgeInsets.only(bottom: _mapBottomInset),
       polylines: {
-        if (_selectedRoute.length >= 2)
+        // Draw every NON-selected nearby trail in dimmed trailColor
+        // (~55% alpha) so users can discover all trails in the visible
+        // area at a glance. The selected trail is drawn last with a
+        // dark-brown halo + full trailColor stroke on top so it stays
+        // dominant. Each idle polyline is tappable — tap selects the
+        // trail and slides the card carousel without moving the camera.
+        for (var i = 0; i < _trails.length; i++)
+          if (i != _selectedIdx)
+            if ((_routeCache[_trails[i].id ?? ''] ?? const []).length >= 2)
+              gmap.Polyline(
+                polylineId: gmap.PolylineId('trail_${_trails[i].id}'),
+                points: _routeCache[_trails[i].id]!,
+                color: MapStyles.trailUnselectedColor,
+                width: MapStyles.trailUnselectedWidth,
+                zIndex: 1,
+                consumeTapEvents: true,
+                onTap: () =>
+                    _onTrailMarkerTapped(i, animateCamera: false),
+              ),
+        // Selected trail: halo first (drawn below), then the bright
+        // orange main line on top — the Strava-style outlined look.
+        if (_selectedRoute.length >= 2) ...[
+          gmap.Polyline(
+            polylineId: const gmap.PolylineId('trail_route_halo'),
+            points: _selectedRoute,
+            color: MapStyles.trailHaloColor,
+            width: MapStyles.trailHaloWidth,
+            zIndex: 9,
+          ),
           gmap.Polyline(
             polylineId: const gmap.PolylineId('trail_route'),
             points: _selectedRoute,
-            color: AppColors.primary,
-            width: 5,
+            color: MapStyles.trailColor,
+            width: MapStyles.trailWidth,
+            zIndex: 10,
           ),
+        ],
       },
       markers: markers,
       onMapCreated: (c) {
         _gController = c;
-        if (_trails.isNotEmpty) {
-          _focusRoute(_selectedRoute, _trails[_selectedIdx]);
-        } else {
-          _centerOnUser();
-        }
+        // Always start centered on the user at the spec'd 1 km zoom.
+        // The closest trail's polyline is already drawn highlighted
+        // on top; no camera focus on the trail itself.
+        _centerOnUser();
       },
       onCameraMove: (pos) {
         _cameraCenterCandidate = pos.target;
@@ -1115,8 +1208,31 @@ class TrailsScreenState extends State<TrailsScreen>
       tiltGesturesEnabled: false,
       rotateGesturesEnabled: true,
       polylines: {
-        if (_selectedRoute.length >= 2)
-          AmapAdapter.routePolyline(_selectedRoute, color: AppColors.primary),
+        // See _buildGoogleMap: draw every non-selected nearby trail in
+        // dimmed trailColor (~55% alpha), then the selected one with a
+        // dark-brown halo + full trailColor stroke on top. Idle
+        // polylines are tappable — tap selects the trail without
+        // animating the camera. Set insertion order = render order on
+        // AMap, so halo (added before main) ends up underneath.
+        for (var i = 0; i < _trails.length; i++)
+          if (i != _selectedIdx)
+            if ((_routeCache[_trails[i].id ?? ''] ?? const []).length >= 2)
+              AmapAdapter.routePolyline(
+                _routeCache[_trails[i].id]!,
+                color: MapStyles.trailUnselectedColor,
+                width: MapStyles.trailUnselectedWidth,
+                onTap: (_) =>
+                    _onTrailMarkerTapped(i, animateCamera: false),
+              ),
+        if (_selectedRoute.length >= 2) ...[
+          AmapAdapter.routePolyline(
+            _selectedRoute,
+            color: MapStyles.trailHaloColor,
+            width: MapStyles.trailHaloWidth,
+          ),
+          AmapAdapter.routePolyline(_selectedRoute,
+              color: MapStyles.trailColor),
+        ],
       },
       markers: markers,
       gestureRecognizers: <Factory<OneSequenceGestureRecognizer>>{
@@ -1124,11 +1240,9 @@ class TrailsScreenState extends State<TrailsScreen>
       },
       onMapCreated: (c) {
         _aController = c;
-        if (_trails.isNotEmpty) {
-          _focusRoute(_selectedRoute, _trails[_selectedIdx]);
-        } else {
-          _centerOnUser();
-        }
+        // Same rationale as _buildGoogleMap: center on user at zoom 13
+        // (~1 km radius) regardless of whether trails are loaded.
+        _centerOnUser();
       },
       onCameraMoveEnd: (pos) {
         if (_suppressCameraIdle) return;
@@ -1178,6 +1292,8 @@ class TrailsScreenState extends State<TrailsScreen>
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
+        _recordRow(),
+        const SizedBox(height: 8),
         _layersRow(),
         const SizedBox(height: 8),
         _roundControlBtn(
@@ -1185,10 +1301,19 @@ class TrailsScreenState extends State<TrailsScreen>
           tip: 'My Location',
           onTap: _centerOnUser,
         ),
-        const SizedBox(height: 8),
-        _recordRow(),
       ],
     );
+  }
+
+  double _rightControlsBottom(BuildContext context) {
+    // Keep controls above the current bottom layer:
+    // - collapsed: above the trail-card carousel area
+    // - expanded: above the detail sheet
+    final v = _detailAnim.value;
+    final safeBottom = MediaQuery.of(context).padding.bottom;
+    final collapsedBottom = _kCardArea + 12;
+    final expandedBottom = _expandedSheetHeight(context) + safeBottom + 12;
+    return collapsedBottom + (expandedBottom - collapsedBottom) * v;
   }
 
   /// Layers trigger + a left-expanding pill that reveals normal/satellite

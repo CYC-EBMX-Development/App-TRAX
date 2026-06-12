@@ -377,6 +377,7 @@ class _RaceDetailPageState extends State<RaceDetailPage> {
     final race = _race;
     if (race == null || !race.isCompleted) return const [];
     final canReplay = _liveData != null && _liveData!.riders.isNotEmpty;
+    final canAnalyze = _myRideId != null;
     final canDelete = _myRideId != null;
     return [
       if (canReplay)
@@ -390,6 +391,19 @@ class _RaceDetailPageState extends State<RaceDetailPage> {
             icon: const Icon(Icons.play_circle_outline, color: AppColors.primary),
             tooltip: 'Replay Race',
             onPressed: _onReplayRace,
+          ),
+        ),
+      if (canAnalyze)
+        Container(
+          margin: const EdgeInsets.only(right: 4),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.9),
+            shape: BoxShape.circle,
+          ),
+          child: IconButton(
+            icon: const Icon(Icons.insights_outlined, color: AppColors.primary),
+            tooltip: 'Analyze My Ride',
+            onPressed: _onAnalyzeMyRide,
           ),
         ),
       if (canDelete)
@@ -464,13 +478,21 @@ class _RaceDetailPageState extends State<RaceDetailPage> {
   Widget _buildMap() {
     final riders = <RaceLiveRider>[];
     if (_liveData != null) {
+      final latestAligned = _liveData!.alignedFrames.isNotEmpty
+          ? _liveData!.alignedFrames.last
+          : null;
+      final alignedPos = <int, List<double>>{
+        if (latestAligned != null)
+          for (final p in latestAligned.riders) p.userId: [p.latitude, p.longitude],
+      };
       for (int i = 0; i < _liveData!.riders.length; i++) {
         final r = _liveData!.riders[i];
+        final pos = alignedPos[r.userId];
         riders.add(RaceLiveRider(
           userId: r.userId,
           name: r.userName ?? 'Rider ${i + 1}',
-          latitude: r.latitude,
-          longitude: r.longitude,
+          latitude: pos?[0] ?? r.latitude,
+          longitude: pos?[1] ?? r.longitude,
           completedLaps: r.completedLaps,
           distanceKm: r.distanceKm,
           color: _riderColors[i % _riderColors.length],
@@ -2630,6 +2652,31 @@ class _RaceDetailPageState extends State<RaceDetailPage> {
       isLaps: _race?.isLaps ?? false,
       trailId: _race?.trailId,
       isObserver: _race?.isObserver ?? false,
+    );
+  }
+
+  void _onAnalyzeMyRide() async {
+    final rideId = _myRideId;
+    if (rideId == null) return;
+
+    final ptsResp = await TraxApi.getRidePoints(rideId);
+    if (!mounted) return;
+
+    if (!ptsResp.isSuccess() || ptsResp.data is! List) {
+      showTraxSnackBar(context, ptsResp.message, isError: true);
+      return;
+    }
+
+    final points = (ptsResp.data as List).cast<Map<String, dynamic>>();
+    if (points.length < 2) {
+      showTraxSnackBar(context, 'Not enough ride points for analysis', isError: true);
+      return;
+    }
+
+    MapRouter.openRideAnalysis(
+      context,
+      points: points,
+      rideName: '${_race?.name ?? 'Race'} · You',
     );
   }
 

@@ -172,6 +172,25 @@ class _RideDetailPageState extends State<RideDetailPage> {
                 },
               ),
             ),
+          if (_route.length >= 2)
+            Container(
+              margin: const EdgeInsets.only(right: 4),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.9),
+                shape: BoxShape.circle,
+              ),
+              child: IconButton(
+                icon: const Icon(Icons.insights_outlined, color: AppColors.primary),
+                tooltip: 'Analyze Ride',
+                onPressed: () {
+                  MapRouter.openRideAnalysis(
+                    context,
+                    points: _rawPoints,
+                    rideName: ride.trailName ?? ride.bicycleName ?? 'Ride',
+                  );
+                },
+              ),
+            ),
           Container(
             margin: const EdgeInsets.only(right: 4),
             decoration: BoxDecoration(

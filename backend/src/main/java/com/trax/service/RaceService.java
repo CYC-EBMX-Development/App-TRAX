@@ -3,18 +3,27 @@ package com.trax.service;
 import com.trax.dto.*;
 import com.trax.model.*;
 import com.trax.repository.*;
+import com.trax.signal.LocationIngestService;
+import com.trax.signal.SignalSource;
+import com.trax.signal.UnifiedLocationFrame;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
+import java.time.ZoneId;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
 
 @Service
 public class RaceService {
+
+    private static final Logger log = LoggerFactory.getLogger(RaceService.class);
+    private static final int LIVE_ALIGNMENT_RESOLUTION_MS = 1000;
 
     private final RaceRepository raceRepo;
     private final RaceParticipantRepository participantRepo;
@@ -25,7 +34,7 @@ public class RaceService {
     private final RideRecordRepository rideRecordRepo;
     private final RidePointRepository pointRepo;
     private final RideLapRepository lapRepo;
-    private final ModuleSimulatorService moduleSimulatorService;
+    private final LocationIngestService locationIngestService;
 
     public RaceService(RaceRepository raceRepo,
                        RaceParticipantRepository participantRepo,
@@ -36,7 +45,7 @@ public class RaceService {
                        RideRecordRepository rideRecordRepo,
                        RidePointRepository pointRepo,
                        RideLapRepository lapRepo,
-                       ModuleSimulatorService moduleSimulatorService) {
+                       LocationIngestService locationIngestService) {
         this.raceRepo = raceRepo;
         this.participantRepo = participantRepo;
         this.rideService = rideService;
@@ -46,7 +55,7 @@ public class RaceService {
         this.rideRecordRepo = rideRecordRepo;
         this.pointRepo = pointRepo;
         this.lapRepo = lapRepo;
-        this.moduleSimulatorService = moduleSimulatorService;
+        this.locationIngestService = locationIngestService;
     }
 
     // ── Create Race ──────────────────────────────────────
@@ -311,7 +320,51 @@ public class RaceService {
         return RaceDto.fromEntity(race, all, userId);
     }
 
-    // ── Update Location (during preparing) ───────────────
+    // ── Update Location (preparing lobby + in-progress race) ──────
+
+    /**
+     * Reports a participant's current GPS fix.
+     *
+     * <p>Two roles depending on race state:
+     * <ul>
+     *   <li><b>preparing</b>: only the lobby map needs the fix. We just
+     *       store it on the {@link RaceParticipant} row so every other
+     *       participant's live-data poll sees a fresh pin.</li>
+     *   <li><b>in_progress</b>: the participant is racing, so the fix is
+     *       also persisted as a {@link RidePoint} on their per-rider
+     *       {@link RideRecord}. Without this, {@code detectAndPersistLaps}
+     *       has no data to work with for race rides — race riders would
+     *       never close a lap and {@link #checkAndFinishRider} would never
+     *       fire. Lap detection + WS push then happen automatically via
+     *       {@link RideService#detectLapsForRideId(Long)}, sharing the
+     *       exact same finish-line / approach-direction / freeze-after-
+     *       target rules as solo lap-timer rides.</li>
+     * </ul>
+     */
+    /**
+     * Live-map participant position ONLY — updates the participant's lat/lng so
+     * other riders see them on the live map, but does NOT ingest a ride_point or
+     * run lap detection.
+     *
+     * <p>Used by clients that drive their own dense GPS sampling through the
+     * canonical {@code ActiveRideService} pipeline (phone {@code addRidePoints}
+     * batch upload, or module MQTT). For those clients the dense points already
+     * flow through {@link RideService#addPointsAndGetStats}, which runs
+     * {@code detectAndPersistLaps} for rides that carry a trail + target laps
+     * (race rides do). Re-ingesting here would create near-duplicate rows
+     * (different capturedAtMs → dedup misses), so we deliberately skip it.</p>
+     *
+     * <p>The legacy {@link #updateLocation} path is kept for older app builds
+     * that still rely on the 3 s GPS fix doubling as a ride_point.</p>
+     */
+    @Transactional
+    public void updateParticipantPosition(Long raceId, Long userId, double latitude, double longitude) {
+        RaceParticipant p = participantRepo.findByRaceIdAndUserId(raceId, userId)
+                .orElseThrow(() -> new RuntimeException("You are not in this race"));
+        p.setLatitude(latitude);
+        p.setLongitude(longitude);
+        participantRepo.save(p);
+    }
 
     @Transactional
     public void updateLocation(Long raceId, Long userId, double latitude, double longitude) {
@@ -320,6 +373,48 @@ public class RaceService {
         p.setLatitude(latitude);
         p.setLongitude(longitude);
         participantRepo.save(p);
+
+        // While racing, the same GPS fix doubles as a ride_point so the
+        // shared lap-detection pipeline (RideService.detectAndPersistLaps)
+        // can run. We ONLY do this for phone-source race rides
+        // (mode != with_module): module-bike riders already have their
+        // ride_points written by the MQTT path (ModuleTelemetryService
+        // → ingestModule → RideRecordRepository.findRideCoveringTime),
+        // and writing again here would create duplicate-but-not-quite-
+        // duplicate rows (different capturedAtMs → dedup misses).
+        // Lobby lat/lng above still updates for ALL riders so other
+        // participants see them on the live map regardless of source.
+        RideRecord ride = p.getRide();
+        if (ride != null
+                && "racing".equals(p.getStatus())
+                && "active".equals(ride.getStatus())
+                && !"with_module".equals(ride.getMode())) {
+            try {
+                UnifiedLocationFrame frame = new UnifiedLocationFrame(
+                        System.currentTimeMillis(),
+                        latitude,
+                        longitude,
+                        null,           // altitude not reported on this endpoint
+                        null,           // speed derived later from successive points
+                        null,           // heading
+                        null,           // hdop
+                        SignalSource.PHONE,
+                        "race:" + raceId + ":user:" + userId);
+                locationIngestService.ingestPhone(ride, frame).ifPresent(rp -> {
+                    try {
+                        rideService.detectLapsForRideId(ride.getId());
+                    } catch (Exception ex) {
+                        log.warn("race lap detect failed rideId={} : {}",
+                                ride.getId(), ex.toString());
+                    }
+                });
+            } catch (Exception ex) {
+                // Best-effort: do not fail the location report if ingest
+                // or detection throws. The next 3 s tick will retry.
+                log.warn("race ride_point ingest failed rideId={} userId={} : {}",
+                        ride.getId(), userId, ex.toString());
+            }
+        }
     }
 
     // ── Go Race (host only) → in_progress ────────────────
@@ -346,13 +441,22 @@ public class RaceService {
             RideStartRequest rideReq = new RideStartRequest();
             // Find rider's first bike
             List<Bicycle> bikes = bikeRepo.findByOwnerIdOrderByCreatedAtDesc(rp.getUser().getId());
+            Bicycle riderBike = null;
             if (!bikes.isEmpty()) {
-                rideReq.setBicycleId(bikes.get(0).getId());
+                riderBike = bikes.get(0);
+                rideReq.setBicycleId(riderBike.getId());
             }
-            // Always use phone GPS for race rides — each participant's
-            // device uploads its real position via /api/races/{id}/location.
-            // We never auto-launch the backend module simulator here.
-            rideReq.setMode("without_module");
+            // Per-rider source: module bike (traxSerialNumber present) feeds
+            // its RideRecord directly via MQTT → LocationIngestService.
+            // ingestModule, which finds the covering ride by bike+time via
+            // RideRecordRepository.findRideCoveringTime (mode-agnostic).
+            // Phone-only riders fall back to the existing
+            // /api/races/{id}/location → ingestPhone path inside
+            // RaceService.updateLocation.
+            boolean hasModule = riderBike != null
+                    && riderBike.getTraxSerialNumber() != null
+                    && !riderBike.getTraxSerialNumber().isBlank();
+            rideReq.setMode(hasModule ? "with_module" : "without_module");
             rideReq.setTrailId(race.getTrail().getId());
             rideReq.setTargetLaps(race.getTargetLaps());
 
@@ -390,10 +494,8 @@ public class RaceService {
                 raceId, List.of("host", "rider"));
         for (RaceParticipant rp : riders) {
             if ("racing".equals(rp.getStatus()) && rp.getRide() != null) {
-                // Stop race simulation for this rider
-                try {
-                    moduleSimulatorService.stopSimulation("race_ride_" + rp.getRide().getId());
-                } catch (Exception ignored) {}
+                // (ModuleSimulatorService removed — real module data flows
+                //  via MQTT/BLE relay; race rides no longer need a sim stop.)
 
                 // Remove laps with no completed full lap
                 RideRecord ride = rp.getRide();
@@ -476,21 +578,21 @@ public class RaceService {
         RideRecord ride = rp.getRide();
         if (ride.getCompletedLaps() != null &&
             ride.getCompletedLaps() >= race.getTargetLaps()) {
-            // Rider finished all laps — stop the race-sim ticker first so no
-            // additional ride points are appended after the final lap closes.
-            try {
-                moduleSimulatorService.stopSimulation("race_ride_" + ride.getId());
-            } catch (Exception ignored) {}
+            // Rider finished all laps. (ModuleSimulatorService removed — no
+            //  sim ticker to stop; real module telemetry stops on its own.)
             try {
                 rideService.stopRide(ride.getId(), userId);
             } catch (Exception ignored) {}
 
             rp.setStatus("finished");
-            // Calculate rank
-            long finishedCount = participantRepo.findByRaceIdAndRoleIn(raceId, List.of("host", "rider"))
-                    .stream().filter(p -> "finished".equals(p.getStatus())).count();
-            rp.setFinishRank((int) finishedCount);
             participantRepo.save(rp);
+            // Rank by REAL finish time (target-lap crossing instant), not by
+            // detection order. 5 s batched uploads + live-poll cadence can
+            // deliver two riders' finish points out of order, so the first
+            // point to reach the server is not necessarily the first to
+            // cross the line. recomputeFinishRanksByTime is idempotent and
+            // re-sorts all finishers on their true crossing time.
+            rideService.recomputeFinishRanksByTime(raceId);
 
             // Check if all riders finished
             checkAllFinished(raceId);
@@ -581,6 +683,7 @@ public class RaceService {
         }
 
         List<RaceLiveDto.RiderLiveInfo> riderInfos = new ArrayList<>();
+        Map<Long, List<RidePoint>> ridePointsByRider = new HashMap<>();
         for (RaceParticipant rp : riders) {
             RaceLiveDto.RiderLiveInfo info = new RaceLiveDto.RiderLiveInfo();
             info.setUserId(rp.getUser().getId());
@@ -608,17 +711,22 @@ public class RaceService {
                 info.setDurationSeconds(stats.getDurationSeconds());
 
                 // Latest position
-                var points = pointRepo.findByRideIdOrderByTimestampAsc(ride.getId());
+                var points = pointRepo.findByRideIdOrderByCapturedAtMsAsc(ride.getId());
+                ridePointsByRider.put(rp.getUser().getId(), points);
                 if (!points.isEmpty()) {
                     RidePoint last = points.get(points.size() - 1);
                     info.setLatitude(last.getLatitude());
                     info.setLongitude(last.getLongitude());
                     info.setSpeed(last.getSpeed());
+                    info.setLastCapturedAtMs(resolveCapturedAtMs(last));
                 }
 
                 // Route polyline — all ride points
                 info.setRoute(points.stream()
-                        .map(p -> new RaceLiveDto.PointDto(p.getLatitude(), p.getLongitude()))
+                        .map(p -> new RaceLiveDto.PointDto(
+                                p.getLatitude(),
+                                p.getLongitude(),
+                                resolveCapturedAtMs(p)))
                         .toList());
 
                 // Laps (with checkpoint passes attached)
@@ -650,6 +758,8 @@ public class RaceService {
             }
             riderInfos.add(info);
         }
+
+        applyAlignedAggregation(dto, riderInfos, ridePointsByRider);
 
         // Sort: in LAPS mode rank by best single lap time ascending
         // (riders without a completed lap go last); in RACE mode use the
@@ -690,6 +800,61 @@ public class RaceService {
 
         dto.setRiders(riderInfos);
         return dto;
+    }
+
+    private void applyAlignedAggregation(RaceLiveDto dto,
+                                         List<RaceLiveDto.RiderLiveInfo> riderInfos,
+                                         Map<Long, List<RidePoint>> ridePointsByRider) {
+        Long minMs = null;
+        Long maxMs = null;
+        Map<Long, Map<Long, RaceLiveDto.AlignedRiderPointDto>> frameMap = new TreeMap<>();
+
+        for (RaceLiveDto.RiderLiveInfo rider : riderInfos) {
+            List<RidePoint> points = ridePointsByRider.getOrDefault(rider.getUserId(), List.of());
+            for (RidePoint point : points) {
+                Long capturedAtMs = resolveCapturedAtMs(point);
+                if (capturedAtMs == null) continue;
+                minMs = minMs == null ? capturedAtMs : Math.min(minMs, capturedAtMs);
+                maxMs = maxMs == null ? capturedAtMs : Math.max(maxMs, capturedAtMs);
+
+                long bucket = bucketizeMs(capturedAtMs, LIVE_ALIGNMENT_RESOLUTION_MS);
+                RaceLiveDto.AlignedRiderPointDto rp = new RaceLiveDto.AlignedRiderPointDto();
+                rp.setUserId(rider.getUserId());
+                rp.setLatitude(point.getLatitude());
+                rp.setLongitude(point.getLongitude());
+                rp.setSpeed(point.getSpeed());
+                frameMap.computeIfAbsent(bucket, k -> new LinkedHashMap<>())
+                        .put(rider.getUserId(), rp);
+            }
+        }
+
+        dto.setTimelineResolutionMs(LIVE_ALIGNMENT_RESOLUTION_MS);
+        dto.setTimelineStartMs(minMs);
+        dto.setTimelineEndMs(maxMs);
+        if (frameMap.isEmpty()) {
+            dto.setAlignedFrames(List.of());
+            return;
+        }
+
+        List<RaceLiveDto.AlignedFrameDto> frames = new ArrayList<>(frameMap.size());
+        for (Map.Entry<Long, Map<Long, RaceLiveDto.AlignedRiderPointDto>> e : frameMap.entrySet()) {
+            RaceLiveDto.AlignedFrameDto frame = new RaceLiveDto.AlignedFrameDto();
+            frame.setCapturedAtMs(e.getKey());
+            frame.setRiders(new ArrayList<>(e.getValue().values()));
+            frames.add(frame);
+        }
+        dto.setAlignedFrames(frames);
+    }
+
+    private static Long resolveCapturedAtMs(RidePoint p) {
+        if (p.getCapturedAtMs() != null) return p.getCapturedAtMs();
+        if (p.getTimestamp() == null) return null;
+        return p.getTimestamp().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+    }
+
+    private static long bucketizeMs(long tsMs, int resolutionMs) {
+        if (resolutionMs <= 1) return tsMs;
+        return (tsMs / resolutionMs) * resolutionMs;
     }
 
     // ── Listings ─────────────────────────────────────────

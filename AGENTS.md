@@ -4,6 +4,22 @@ This file is read automatically by Copilot, Claude Code, Cursor, Codex,
 Aider, and most other AI dev tools. Anything you add here becomes a
 hard rule for those tools.
 
+## ⛔ HARD RULES — read before doing anything in this repo
+
+1. **No simulators, no emulators, no `dartvm`, no hot reload, no `flutter run`.**
+   The user develops against a real iPhone only. Never ask for terminal
+   IDs, never suggest hot-reload `r`/`R`, never spin up a simulator.
+2. **"安装到手机" / "install to phone" = iPhone by default.** Command:
+   `cd trax_app && source ~/trax-deploy.env && ./scripts/install_ios.sh --device-id 00008120-000249060AF1A01E`
+   Switch to Android only if the user explicitly says "安卓" / "android".
+3. **Validation flow after editing anything under `trax_app/lib/**`:**
+   `get_errors` (clean) → install to iPhone (unless user said skip or
+   the change is docs/memory-only). No other "done" criterion is valid.
+4. **All user-facing UI strings must be English.** Chinese allowed only
+   in comments/logs.
+5. Backend Java edits: `cd backend && mvn -q -DskipTests compile` must
+   be green before declaring done.
+
 ## TL;DR for any AI agent
 
 - Frontend lives in `trax_app/` (Flutter, dual map provider: Google + AMap).

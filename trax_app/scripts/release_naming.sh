@@ -125,10 +125,20 @@ trax_release_resolve_base() {
   if [[ -n "$found" ]]; then
     seq="$found"
   else
-    local max_local max_remote max_all
+    local max_local max_remote max_map max_all
     max_local="$(trax_release_local_max "$app_root" "$prefix")"
     max_remote="$(trax_release_remote_max "$prefix")"
-    max_all=$(( 10#${max_local:-0} > 10#${max_remote:-0} ? 10#${max_local:-0} : 10#${max_remote:-0} ))
+    # Also consider seqs already allocated in today's map file so two fast-fire
+    # releases with different snapshots cannot both pick the same seq (and one
+    # overwrite the other's apk/ipa). Without this, only files on disk/server
+    # are consulted, so a second resolve_base run before the first build's
+    # artifacts have landed will collide.
+    max_map="$(awk -F '\t' '{print $2+0}' "$map_file" 2>/dev/null | sort -n | tail -1)"
+    max_map="${max_map:-0}"
+    local m1 m2
+    m1=$(( 10#${max_local:-0} > 10#${max_remote:-0} ? 10#${max_local:-0} : 10#${max_remote:-0} ))
+    m2=$(( m1 > 10#${max_map:-0} ? m1 : 10#${max_map:-0} ))
+    max_all="$m2"
     seq="$((max_all + 1))"
     printf '%s\t%s\n' "$snapshot" "$seq" >> "$map_file"
   fi

@@ -13,6 +13,8 @@ import '../../common/network/trax_api.dart';
 import '../../common/global/global_user_info.dart';
 import '../../models/race_live_data.dart';
 import '../../models/user_checkpoint.dart';
+import '../../common/utils/map_styles.dart';
+import '../../common/utils/replay_resample.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/lap_splits_grid.dart';
 import 'package:trax_app/common/widgets/page_code_badge.dart';
@@ -186,6 +188,17 @@ class _RaceReplayPageState extends State<RaceReplayPage> {
           speeds = speeds.sublist(0, cut);
         }
       }
+
+      // Resample onto a fixed 200ms grid: one point per 200ms, sparse 1s
+      // gaps split into 5 interpolated sub-points along the straight line.
+      final resampled = resampleReplayTrack(
+        route: route,
+        times: times,
+        speeds: speeds,
+      );
+      route = resampled.route;
+      times = resampled.times;
+      speeds = resampled.speeds;
 
       list.add(_ReplayRiderData(
         rider: r,
@@ -421,7 +434,9 @@ class _RaceReplayPageState extends State<RaceReplayPage> {
   void _tick() {
     _timer?.cancel();
     if (!_playing) return;
-    final ms = (650 / _speed).clamp(60, 2000).toInt();
+    // Fixed 200ms playback cadence (scaled by _speed); points are already
+    // resampled to a 200ms grid in _loadReplayData.
+    final ms = (200 / _speed).clamp(16, 4000).toInt();
     _timer = Timer(Duration(milliseconds: ms), () {
       if (!mounted || !_playing) return;
       if (_step >= _maxSteps - 1) {
@@ -562,7 +577,7 @@ class _RaceReplayPageState extends State<RaceReplayPage> {
           polylineId: PolylineId('r_${r.rider.userId}'),
           points: r.route.sublist(0, end + 1),
           color: _colorFor(r.rider.userId),
-          width: 4,
+          width: MapStyles.rideTrackWidth,
           zIndex: z++,
         ),
       );
@@ -849,47 +864,8 @@ class _RaceReplayPageState extends State<RaceReplayPage> {
                 Positioned(
                   top: MediaQuery.of(context).padding.top + 8,
                   left: 12,
-                  right: 12,
-                  child: Row(
-                    children: [
-                      _circleBtn(
-                          Icons.arrow_back, () => Navigator.pop(context)),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(22),
-                            boxShadow: [
-                              BoxShadow(
-                                  color:
-                                      Colors.black.withValues(alpha: 0.1),
-                                  blurRadius: 6)
-                            ],
-                          ),
-                          child: Row(
-                            children: [
-                              const Icon(Icons.replay,
-                                  size: 18, color: AppColors.primary),
-                              const SizedBox(width: 6),
-                              Expanded(
-                                child: Text(
-                                  '${widget.raceName} · Replay',
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600,
-                                      color: AppColors.primary),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                  child: _circleBtn(
+                      Icons.arrow_back, () => Navigator.pop(context)),
                 ),
                 // Live ranking overlay (right side) — animates when
                 // positions change. LAPS-mode ranks by best lap; otherwise

@@ -11,6 +11,12 @@ class AppColors {
   static const Color error = Color(0xFFE53935);
   static const Color success = Color(0xFF43A047);
   static const Color warning = Color(0xFFE69100);
+  // Note: trail polyline colors (selected, non-selected, dimmed-under-rider,
+  // halo) live in `MapStyles` (lib/common/utils/map_styles.dart) — they are
+  // map-styling concerns, not brand/UI colors. AppColors.primary (#FFB800)
+  // remains the brand golden-yellow used by buttons, icons, banners, and
+  // start/finish markers; trails on the map render in MapStyles.trailColor
+  // (deep warm orange #FF6B00) with optional halo for the Strava-style look.
 }
 
 OverlayEntry? _activeTraxBanner;
@@ -36,8 +42,12 @@ void showTraxSnackBar(
 
   final overlay = Overlay.of(context, rootOverlay: true);
   final mq = MediaQuery.of(context);
-  // Push below the status bar + nominal AppBar height so the banner sits
-  // "under the topbar" as requested.
+  // Sit just below the topbar. `padding.top` covers the status bar; the
+  // floating pill bar on map pages (~44h + ~10 margins) and a standard
+  // AppBar (kToolbarHeight = 56) both end around `padding.top + 56`, so a
+  // single offset works for both. SafeArea is intentionally NOT used here
+  // — wrapping a Positioned with SafeArea would re-add padding.top and
+  // push the banner far below the topbar.
   final topInset = mq.padding.top + kToolbarHeight + 4;
 
   late OverlayEntry entry;
@@ -54,46 +64,43 @@ void showTraxSnackBar(
       top: topInset,
       left: 16,
       right: 16,
-      child: SafeArea(
-        bottom: false,
-        child: Material(
-          color: Colors.transparent,
-          child: GestureDetector(
-            onTap: dismiss,
-            child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              decoration: BoxDecoration(
-                color: isError ? AppColors.error : const Color(0xFF333333),
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x33000000),
-                    blurRadius: 8,
-                    offset: Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    isError ? Icons.error_outline : Icons.info_outline,
-                    color: Colors.white,
-                    size: 20,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      message,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                      ),
+      child: Material(
+        color: Colors.transparent,
+        child: GestureDetector(
+          onTap: dismiss,
+          child: Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: isError ? AppColors.error : const Color(0xFF333333),
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x33000000),
+                  blurRadius: 8,
+                  offset: Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  isError ? Icons.error_outline : Icons.info_outline,
+                  color: Colors.white,
+                  size: 20,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    message,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),

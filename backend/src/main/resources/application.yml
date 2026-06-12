@@ -31,8 +31,44 @@ server:
 
 jwt:
   secret: trax-secret-key-for-jwt-token-generation-min-256-bits-long-key
-  expiration: 86400000
+  # 30 days — matches client `_loginExpireDays` so isLogin() and JWT
+  # exp move together. Refresh window is the longer envelope below.
+  expiration: 2592000000
+  # 90 days — refresh token issued alongside access token, allows the
+  # app to silently re-issue an access token via POST /api/auth/refresh
+  # without forcing the user to re-enter credentials.
+  refresh-expiration: 7776000000
 
 google:
   maps:
     api-key: AIzaSyDmzdgVvZu4f5Q7zCKytQ5Syz0RLQzUxng
+
+# ── vesc-iot MQTT broker bridge ─────────────────────────────────────────
+# trax-backend subscribes to `$share/${share-group}/+/position` to receive
+# module GPS frames in NMEA $PCYCGPS form, decodes via NmeaGpsCodec, and
+# stores into module_telemetry.  Disabled if `iot.mqtt.enabled: false`.
+iot:
+  mqtt:
+    enabled: true
+    # Same host → use loopback to skip firewall + TLS.
+    host: 127.0.0.1
+    port: 1883
+    # ClientId must be unique per instance; override via IOT_MQTT_CLIENT_ID
+    # (e.g. analytics-1, analytics-2) when running multiple replicas.
+    client-id: ${IOT_MQTT_CLIENT_ID:analytics-1}
+    username: iot_analytics
+    password: evyRMgOQr9vdu49wUGGFgMl6
+    clean-start: false
+    keep-alive: 60
+    # Shared subscription group — broker fans every device message to both
+    # the `iot-ingest` group and this `analytics` group; no consumer contest.
+    share-group: analytics
+
+# ── Lap detection tuning ────────────────────────────────────────────────
+trax:
+  lap:
+    # Minimum net displacement (m) the rider must move away from the finish
+    # line before a crossing is accepted as a completed lap. Distance-based
+    # (sampling-rate independent). 8 m suits a dual-band L1+L5 antenna
+    # (~1–2 m CEP); raise toward ~20 m for a noisier single-band L1 module.
+    leaving-net-displacement-m: 8.0

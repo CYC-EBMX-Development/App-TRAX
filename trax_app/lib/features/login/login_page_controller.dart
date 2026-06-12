@@ -23,9 +23,23 @@ class LoginPageController extends GetxController {
 
   final formKey = GlobalKey<FormState>();
 
+  // Optional dev-time default email injected at build time via
+  //   --dart-define=DEV_DEFAULT_EMAIL=joshuawang@cycmotor.com
+  // Only used when no email has been remembered yet (first install through
+  // the maintainer's own build scripts). Production builds for end-users
+  // simply omit the dart-define and behaviour is unchanged.
+  static const String _devDefaultEmail =
+      String.fromEnvironment('DEV_DEFAULT_EMAIL');
+
   @override
   void onInit() {
-    emailController.text = TraxStorageUtil.getLoginEmail();
+    // Priority: previously-saved login email > build-time dev default > empty.
+    final saved = TraxStorageUtil.getLoginEmail();
+    if (saved.isNotEmpty) {
+      emailController.text = saved;
+    } else if (_devDefaultEmail.isNotEmpty) {
+      emailController.text = _devDefaultEmail;
+    }
     if (Global.skipRule) {
       emailController.text = Global.skipRuleEmail;
       passwordController.text = Global.skipRulePwd;
@@ -62,6 +76,7 @@ class LoginPageController extends GetxController {
 
   Future<void> loginSuccess(LoginModel loginModel) async {
     TraxStorageUtil.saveToken(loginModel.accessToken);
+    TraxStorageUtil.saveRefreshToken(loginModel.refreshToken);
     TraxStorageUtil.saveTokenType(loginModel.tokenType);
     TraxStorageUtil.saveUserInfo(loginModel.user?.toJson());
     TraxStorageUtil.saveLoginEmail(loginModel.user?.email);

@@ -7,7 +7,6 @@ import 'package:get/get.dart';
 
 import 'common/global/global_user_info.dart';
 import 'common/services/map_provider.dart';
-import 'common/services/gps_interval_settings.dart';
 import 'common/utils/app_restart.dart';
 import 'common/utils/start_end_marker_icons.dart';
 import 'common/utils/start_end_marker_icons_amap.dart';
@@ -39,9 +38,6 @@ Future<void> main() async {
   // Decide map provider (Google vs AMap) based on cached preference; a
   // background GPS-based refresh is kicked off internally.
   await MapProviderService.init();
-
-  // Load user-selected GPS sampling cadence (Profile → Settings).
-  await GpsIntervalSettings.init();
 
   runApp(const AppWrapper());
 }

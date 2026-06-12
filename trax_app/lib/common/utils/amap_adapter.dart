@@ -6,6 +6,7 @@ import 'package:flutter/material.dart' show Color, Offset;
 import 'package:google_maps_flutter/google_maps_flutter.dart' as gmap;
 
 import 'coord_transform.dart';
+import 'map_styles.dart';
 import 'start_end_marker_icons_amap.dart';
 import '../services/map_service.dart';
 import '../../theme/app_theme.dart';
@@ -57,14 +58,20 @@ class AmapAdapter {
 
   /// Build a polyline overlay from a WGS-84 route.
   ///
-  /// Default width is `8` (doubled from the previous default of `4`) to
-  /// match the bumped trail-line styling used app-wide.
+  /// Default width is [MapStyles.trailWidth] (the unified trail width,
+  /// identical to the Google Maps side). Ride-track call sites should
+  /// pass `width: MapStyles.rideTrackWidth` explicitly. Width is [int]
+  /// for parity with `google_maps_flutter`; we convert to double for
+  /// the AMap polyline here.
   static amap_map.Polyline routePolyline(List<gmap.LatLng> points,
-      {double width = 8, Color? color}) {
+      {int width = MapStyles.trailWidth,
+      Color? color,
+      void Function(String id)? onTap}) {
     return amap_map.Polyline(
       points: toAmapList(points),
       color: color ?? AppColors.primary,
-      width: width,
+      width: width.toDouble(),
+      onTap: onTap,
     );
   }
 

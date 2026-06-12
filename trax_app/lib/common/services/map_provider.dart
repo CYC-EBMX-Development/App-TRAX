@@ -1,10 +1,10 @@
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../utils/coord_transform.dart';
+import 'location_service.dart';
 
 enum MapProvider { google, amap }
 
@@ -208,22 +208,14 @@ class MapProviderService {
   /// only when a coordinate was actually read and applied.
   static Future<bool> _attemptResolveFromGps() async {
     try {
-      final perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied ||
-          perm == LocationPermission.deniedForever) {
-        return false;
-      }
-      // Prefer the cached fix to avoid waking up the GPS hardware on
-      // startup; fall back to a low-accuracy live fix with a hard
-      // timeout so we don't block the future indefinitely.
-      Position? pos = await Geolocator.getLastKnownPosition();
-      pos ??= await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.low,
-          timeLimit: Duration(seconds: 8),
-        ),
+      // Dual-source fix (Geolocator + AMap, first wins). AMap is what lets
+      // the provider resolve correctly indoors in mainland China, where the
+      // GMS network-location server is unreachable. Returns WGS-84.
+      final fix = await LocationService.getFix(
+        timeout: const Duration(seconds: 8),
       );
-      await applyForCoordinate(pos.latitude, pos.longitude);
+      if (fix == null) return false;
+      await applyForCoordinate(fix.latitude, fix.longitude);
       return true;
     } catch (_) {
       return false;

@@ -11,6 +11,7 @@ import '../../models/ride_lap.dart';
 import '../../common/network/trax_api.dart';
 import '../../common/widgets/trax_dialog.dart';
 import '../../common/widgets/trax_refresh_button.dart';
+import '../../common/utils/map_styles.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/lap_splits_grid.dart';
 import 'package:trax_app/common/widgets/page_code_badge.dart';
@@ -123,8 +124,8 @@ class _RideSummaryPageState extends State<RideSummaryPage> {
                       Polyline(
                         polylineId: const PolylineId('route'),
                         points: _route,
-                        color: Colors.red,
-                        width: 4,
+                        color: MapStyles.rideTrackColor,
+                        width: MapStyles.rideTrackWidth,
                       ),
                     },
                     markers: {

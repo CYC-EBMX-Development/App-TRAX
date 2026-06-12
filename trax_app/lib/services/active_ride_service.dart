@@ -8,7 +8,28 @@ import '../models/ride_stats.dart';
 import '../models/ride_point.dart';
 import '../models/module_telemetry.dart';
 import '../common/network/trax_api.dart';
-import '../common/services/gps_interval_settings.dart';
+import '../common/services/module_telemetry_ws_client.dart';
+import '../common/services/ride_lap_ws_client.dart';
+
+enum _SamplingMode { base, fast }
+
+class _SamplingDecision {
+  const _SamplingDecision({
+    required this.mode,
+    required this.reason,
+    required this.triggerRadiusM,
+    required this.distStartM,
+    required this.distEndM,
+    required this.speedKmh,
+  });
+
+  final _SamplingMode mode;
+  final String reason;
+  final double triggerRadiusM;
+  final double distStartM;
+  final double distEndM;
+  final double speedKmh;
+}
 
 class ActiveRideService extends ChangeNotifier {
   ActiveRideService._();
@@ -30,24 +51,38 @@ class ActiveRideService extends ChangeNotifier {
   int? _trailId;
   String? _trailName;
   int? _targetLaps;
-  // Optional anchor points (start / end) used to drive the adaptive
-  // 1 s / 0.1 s GPS sampling near lap boundaries.
+  // Optional anchor points (start / end) used to drive adaptive
+  // sampling near lap boundaries.
   LatLng? _anchorStart;
   LatLng? _anchorEnd;
 
   // ── Adaptive sampling state ─────────────────────────
-  // Base cadence is user-configurable via Profile → Settings
-  // (GpsIntervalSettings). Near a lap boundary the stream re-subscribes
-  // at [_kFastIntervalMs] for higher precision; the fast rate is never
-  // slower than the configured base.
-  int get _kBaseIntervalMs => GpsIntervalSettings.baseIntervalMs;
-  int get _kFastIntervalMs =>
-      GpsIntervalSettings.baseIntervalMs < 100 ? GpsIntervalSettings.baseIntervalMs : 100;
-  static const double _kFastSampleRadiusM = 10.0;
-  int _currentIntervalMs = GpsIntervalSettings.baseIntervalMs;
-  Timer? _samplingPollTimer;  // Last observed distance to each anchor (metres). Used to detect whether
+  // Phone GPS base cadence is fixed at 1 s: both iOS Core Location and
+  // Android FusedLocationProvider bottom out at the GNSS chip's native
+  // ~1 Hz regardless of any faster request, so a user-tunable interval
+  // was misleading and was removed (2026-06-11).
+  //
+  // The adaptive "fast mode" decision machinery below ([setSamplingAnchors],
+  // [_decideSamplingMode], [_applySamplingDecision], speed-tiered radii)
+  // is RETAINED on purpose: it will drive the TRAX module firmware's
+  // variable sampling rate. When the rider enters the speed-tiered radius
+  // near a finish-line anchor, the module should be told (over BLE/MQTT)
+  // to boost its emission rate, and revert on leave. On the phone path
+  // [_applySamplingDecision] re-subscribes the GPS stream at the faster
+  // interval, but the OS still caps delivery at ~1 Hz — harmless no-op
+  // until the module firmware lands.
+  static const int _kBaseIntervalMs = 1000;
+  static const int _kFastIntervalMs = 200;
+  static const int _kFastSpeedThresholdKmh = 50;
+  static const double _kFastRadiusLowSpeedM = 25.0;
+  static const double _kFastRadiusHighSpeedM = 50.0;
+  static const double _kFastExitHysteresisM = 8.0;
+  int _currentIntervalMs = _kBaseIntervalMs;
+  _SamplingMode _samplingMode = _SamplingMode.base;
+  Timer? _samplingPollTimer;
+  // Last observed distance to each anchor (metres). Used to detect whether
   // the rider is *approaching* the anchor (distance shrinking) so the
-  // 100 ms cadence only kicks in on the way IN — not while leaving.
+  // fast cadence only kicks in on the way IN — not while leaving.
   double? _lastDistToStartM;
   double? _lastDistToEndM;
   // Timestamp of the last fix accepted by [_onGpsFix]. Used on iOS /
@@ -74,13 +109,16 @@ class ActiveRideService extends ChangeNotifier {
   Timer? _durationTimer;
   Timer? _uploadTimer;
   StreamSubscription<Position>? _geoSub;
+  // WebSocket push channel for module telemetry (with-module path).
+  // Falls back to [_telemetryTimer] polling if the WS never connects.
+  ModuleTelemetryWsClient? _wsClient;
+  StreamSubscription<Map<String, dynamic>>? _wsSub;
+  // WebSocket push channel for lap-completion events on the active ride.
+  // Each push triggers an immediate [_pollStats] so the UI updates with
+  // no 3 s polling lag. The 3 s [_statsTimer] still runs as a safety net.
+  RideLapWsClient? _lapWsClient;
+  StreamSubscription<Map<String, dynamic>>? _lapWsSub;
   final List<RidePoint> _pendingPoints = [];
-
-  // Force-phone-GPS flag. When true, [_startTimers] always uses the
-  // phone GPS path even if the bike has a TRAX module configured.
-  // Lap Timer sessions set this so the rider's actual movement drives
-  // the map / lap detection, instead of the backend module simulator.
-  bool _forcePhoneGps = false;
 
   // Getters
   int? get rideId => _rideId;
@@ -127,9 +165,8 @@ class ActiveRideService extends ChangeNotifier {
 
   /// Start a Lap Timer ride bound to a Lap-type trail.
   ///
-  /// Always uses the phone's real GPS for tracking, even if the bike
-  /// has a TRAX module configured. The backend module simulator is not
-  /// started for Lap Timer rides.
+  /// Location source follows the bike selection (module if the bike has a
+  /// TRAX serial, phone GPS otherwise) — same rule as every other ride.
   Future<bool> startLapTimer({
     required EBike bike,
     required int trailId,
@@ -137,8 +174,7 @@ class ActiveRideService extends ChangeNotifier {
     required int targetLaps,
   }) async {
     _bike = bike;
-    _forcePhoneGps = true;
-    _mode = 'without_module';
+    _mode = _hasModule ? 'with_module' : 'without_module';
     final bikeId = int.tryParse(bike.id) ?? 0;
     final resp = await TraxApi.startRide(
       bicycleId: bikeId,
@@ -175,7 +211,11 @@ class ActiveRideService extends ChangeNotifier {
 
     _statsTimer = Timer.periodic(const Duration(seconds: 3), (_) => _pollStats());
 
-    if (_hasModule && !_forcePhoneGps) {
+    // Lap-completion push (server-driven, near-zero lag). The 3 s stats
+    // poll above is the fallback if the WS never connects.
+    _subscribeLapWs();
+
+    if (_hasModule) {
       _startModuleTracking();
     } else {
       _startPhoneGps();
@@ -183,16 +223,127 @@ class ActiveRideService extends ChangeNotifier {
   }
 
   Future<void> _startModuleTracking() async {
-    // Use currentPos (may be user-picked) as the simulation starting point
-    await TraxApi.startSimulation(_serialNo,
-        latitude: currentPos.latitude,
-        longitude: currentPos.longitude,
-        rideId: _rideId);
-    _telemetryTimer = Timer.periodic(const Duration(seconds: 2), (_) => _pollTelemetry());
+    // Real module sends NMEA → MQTT broker → trax-backend, which fans
+    // out to WebSocket subscribers. The App no longer drives the
+    // backend simulator — it just subscribes to the live stream.
+    //
+    // Fallback: a 2 s HTTP poll runs in parallel until the WS reports
+    // its first frame. If the bike has no module data yet (offline),
+    // both channels silently produce nothing and the UI stays put.
+    _subscribeModuleWs();
+    _telemetryTimer =
+        Timer.periodic(const Duration(seconds: 2), (_) => _pollTelemetry());
+    // Same upload cadence as phone-GPS path so the backend ride gets
+    // points to render polyline / replay / riding info from.
+    _uploadTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (_pendingPoints.isNotEmpty) _uploadPendingPoints();
+    });
+  }
+
+  void _subscribeModuleWs() {
+    _wsSub?.cancel();
+    _wsClient?.dispose();
+    final client = ModuleTelemetryWsClient(serialNo: _serialNo);
+    _wsClient = client;
+    _wsSub = client.stream.listen(_onModuleTelemetryJson);
+    // Fire-and-forget; client schedules its own reconnect on failure.
+    unawaited(client.connect());
+  }
+
+  /// Subscribe to `/ws/rides/{rideId}/laps` for the active ride. Each
+  /// incoming event (`type:"lap"` or `type:"completed"`) triggers an
+  /// immediate [_pollStats] so the UI gets the new lap with no 3 s
+  /// polling lag. Idempotent — safe to call after re-attaching to an
+  /// in-progress ride via [checkActiveRide].
+  void _subscribeLapWs() {
+    if (_rideId == null) return;
+    _lapWsSub?.cancel();
+    _lapWsClient?.dispose();
+    final client = RideLapWsClient(rideId: _rideId!);
+    _lapWsClient = client;
+    _lapWsSub = client.stream.listen((_) {
+      // Don't trust the WS payload's lap counts; just refetch the
+      // canonical stats (laps array + completedLaps + status) so the UI
+      // renders the same server state it would have on the next poll.
+      _pollStats();
+    });
+    unawaited(client.connect());
+  }
+
+  void _onModuleTelemetryJson(Map<String, dynamic> json) {
+    try {
+      final t = ModuleTelemetry.fromJson(json);
+      _telemetry = t;
+      final pos = LatLng(t.latitude, t.longitude);
+      currentPos = pos;
+      // Only persist the point to the local route list when an actual ride
+      // is running. Pre-Start (preview) frames are used to populate the
+      // my-location pin / signal indicator only — they must NOT seed the
+      // recorded polyline.
+      if (isActive) {
+        route.add(pos);
+        _enqueueModulePoint(t);
+        _evaluateAndApplySamplingMode(pos, speedKmh: t.speed.toDouble());
+      }
+      notifyListeners();
+    } catch (_) {/* ignore malformed */}
+  }
+
+  /// Queue a module-sourced fix for the next [_uploadTimer] flush so
+  /// the backend ride gets a polyline / replay / riding-info just like
+  /// a phone-GPS ride. Module speed is already km/h (UI consumers treat
+  /// it as such). Altitude is forwarded when present (added 2026-06-04);
+  /// frames without altitude fall back to 0 for back-compat.
+  void _enqueueModulePoint(ModuleTelemetry t) {
+    final ts = t.timestamp;
+    DateTime when;
+    if (ts != null && ts.isNotEmpty) {
+      when = DateTime.tryParse(ts) ?? DateTime.now();
+    } else {
+      when = DateTime.now();
+    }
+    _pendingPoints.add(RidePoint(
+      latitude: t.latitude,
+      longitude: t.longitude,
+      speed: t.speed.clamp(0, 200).toDouble(),
+      altitude: t.altitude ?? 0,
+      timestamp: when,
+    ));
+  }
+
+  /// Pre-start preview: subscribe to the module telemetry WebSocket so
+  /// the my-location button and signal indicator can light up before the
+  /// rider taps Start. NO ride is created on the backend, NO timers run,
+  /// and incoming frames are NOT appended to the [route] list (see
+  /// [_onModuleTelemetryJson]).
+  ///
+  /// Safe to call repeatedly; calls during an active ride are no-ops.
+  void previewModule(EBike bike) {
+    if (_rideStatus != 'idle') return;
+    final serial = bike.traxSerialNumber;
+    if (serial == null || serial.isEmpty) return;
+    if (_bike?.traxSerialNumber == serial && _wsClient != null) return;
+    _bike = bike;
+    _subscribeModuleWs();
+  }
+
+  /// Tear down a preview subscription started by [previewModule]. No-op
+  /// if the ride has progressed past idle (the active ride owns the
+  /// subscription at that point).
+  void stopPreview() {
+    if (_rideStatus != 'idle') return;
+    _wsSub?.cancel();
+    _wsSub = null;
+    _wsClient?.dispose();
+    _wsClient = null;
+    _telemetry = null;
+    _bike = null;
+    notifyListeners();
   }
 
   void _startPhoneGps() {
     _currentIntervalMs = _kBaseIntervalMs;
+    _samplingMode = _SamplingMode.base;
     _lastAcceptedFixAt = null;
     _geoSub = Geolocator.getPositionStream(
       locationSettings: _buildLocationSettings(_kBaseIntervalMs),
@@ -201,7 +352,8 @@ class ActiveRideService extends ChangeNotifier {
     _samplingPollTimer?.cancel();
     _samplingPollTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (_rideStatus != 'active') return;
-      _maybeAdjustSamplingRate(currentPos);
+      final speedKmh = (_telemetry?.speed ?? 0).toDouble();
+      _evaluateAndApplySamplingMode(currentPos, speedKmh: speedKmh);
     });
 
     _uploadTimer = Timer.periodic(const Duration(seconds: 5), (_) {
@@ -266,7 +418,7 @@ class ActiveRideService extends ChangeNotifier {
     currentPos = latlng;
     route.add(latlng);
     notifyListeners();
-    _maybeAdjustSamplingRate(latlng);
+    _evaluateAndApplySamplingMode(latlng, speedKmh: (pos.speed * 3.6));
   }
 
   /// Configure background-capable location updates for the active ride.
@@ -312,17 +464,32 @@ class ActiveRideService extends ChangeNotifier {
 
   /// Set the anchor points used for adaptive sampling. For a lap-timer ride
   /// pass start = end (loop). For a free ride leave both null — sampling
-  /// stays at the 1 s base rate.
+  /// stays at the configured base rate.
   void setSamplingAnchors({LatLng? start, LatLng? end}) {
     _anchorStart = start;
     _anchorEnd = end;
+    _samplingMode = _SamplingMode.base;
+    _currentIntervalMs = _kBaseIntervalMs;
     _lastDistToStartM = null;
     _lastDistToEndM = null;
   }
 
-  void _maybeAdjustSamplingRate(LatLng pos) {
-    if (_rideStatus != 'active') return;
-    if (_anchorStart == null && _anchorEnd == null) return;
+  void _evaluateAndApplySamplingMode(LatLng pos, {required double speedKmh}) {
+    final decision = _decideSamplingMode(pos, speedKmh: speedKmh);
+    if (decision == null) return;
+    _applySamplingDecision(decision);
+  }
+
+  _SamplingDecision? _decideSamplingMode(LatLng pos, {required double speedKmh}) {
+    if (_rideStatus != 'active') return null;
+    if (_anchorStart == null && _anchorEnd == null) return null;
+
+    final speed = speedKmh.clamp(0, 200).toDouble();
+    final triggerRadius = speed >= _kFastSpeedThresholdKmh
+        ? _kFastRadiusHighSpeedM
+        : _kFastRadiusLowSpeedM;
+    final exitRadius = triggerRadius + _kFastExitHysteresisM;
+
     final dStart = _anchorStart == null
         ? double.infinity
         : _haversineMeters(pos, _anchorStart!);
@@ -331,11 +498,11 @@ class ActiveRideService extends ChangeNotifier {
         : _haversineMeters(pos, _anchorEnd!);
 
     // Approaching = inside the radius AND distance shrinking compared to
-    // the previous fix. This guarantees the 100 ms cadence only kicks in
+    // the previous fix. This guarantees the fast cadence only kicks in
     // on the way TOWARDS a boundary, not while leaving it.
-    final approachingStart = dStart < _kFastSampleRadiusM &&
+    final approachingStart = dStart <= triggerRadius &&
         (_lastDistToStartM == null || dStart < _lastDistToStartM!);
-    final approachingEnd = dEnd < _kFastSampleRadiusM &&
+    final approachingEnd = dEnd <= triggerRadius &&
         (_lastDistToEndM == null || dEnd < _lastDistToEndM!);
     final leavingStart = _lastDistToStartM != null && dStart > _lastDistToStartM!;
     final leavingEnd = _lastDistToEndM != null && dEnd > _lastDistToEndM!;
@@ -343,25 +510,76 @@ class ActiveRideService extends ChangeNotifier {
     _lastDistToStartM = dStart;
     _lastDistToEndM = dEnd;
 
-    int desiredMs;
+    _SamplingMode desiredMode = _samplingMode;
+    String reason = 'hold';
     if (approachingStart || approachingEnd) {
-      desiredMs = _kFastIntervalMs;
-    } else if (_currentIntervalMs == _kFastIntervalMs &&
-        (leavingStart || leavingEnd)) {
-      // We were sampling fast and have now crossed / are moving away — go
-      // back to the 1 s base cadence.
-      desiredMs = _kBaseIntervalMs;
-    } else {
-      desiredMs = _currentIntervalMs;
+      desiredMode = _SamplingMode.fast;
+      reason = 'approaching';
+    } else if (_samplingMode == _SamplingMode.fast) {
+      final leftFastZone = (dStart >= exitRadius || dEnd >= exitRadius) &&
+          (leavingStart || leavingEnd);
+      if (leftFastZone) {
+        desiredMode = _SamplingMode.base;
+        reason = 'leaving';
+      }
     }
-    if (desiredMs == _currentIntervalMs) return;
+
+    return _SamplingDecision(
+      mode: desiredMode,
+      reason: reason,
+      triggerRadiusM: triggerRadius,
+      distStartM: dStart,
+      distEndM: dEnd,
+      speedKmh: speed,
+    );
+  }
+
+  void _applySamplingDecision(_SamplingDecision decision) {
+    if (decision.mode == _samplingMode) return;
+
+    _samplingMode = decision.mode;
+    final desiredMs =
+        decision.mode == _SamplingMode.fast ? _kFastIntervalMs : _kBaseIntervalMs;
     _currentIntervalMs = desiredMs;
+
+    if (_mode == 'with_module') {
+      _requestModuleSamplingMode(
+        mode: decision.mode,
+        reason: decision.reason,
+        triggerRadiusM: decision.triggerRadiusM,
+        speedKmh: decision.speedKmh,
+        distStartM: decision.distStartM,
+        distEndM: decision.distEndM,
+      );
+      return;
+    }
+
     _lastAcceptedFixAt = null;
-    if (_mode != 'without_module') return; // module mode doesn't use phone GPS
     _geoSub?.cancel();
     _geoSub = Geolocator.getPositionStream(
       locationSettings: _buildLocationSettings(desiredMs),
     ).listen(_onGpsFix);
+  }
+
+  void _requestModuleSamplingMode({
+    required _SamplingMode mode,
+    required String reason,
+    required double triggerRadiusM,
+    required double speedKmh,
+    required double distStartM,
+    required double distEndM,
+  }) {
+    // Reserved interface: with-module uses the same fast/base decision
+    // engine as phone GPS, but firmware cadence remains fixed for now.
+    // Future implementation should send a BLE/MQTT command here.
+    if (!kDebugMode) return;
+    final target = mode == _SamplingMode.fast ? 'FAST' : 'BASE';
+    debugPrint(
+      '[sampling][module] mode=$target reason=$reason '
+      'speed=${speedKmh.toStringAsFixed(1)}kmh '
+      'r=${triggerRadiusM.toStringAsFixed(1)}m '
+      'dS=${distStartM.toStringAsFixed(1)} dE=${distEndM.toStringAsFixed(1)}',
+    );
   }
 
   static double _haversineMeters(LatLng a, LatLng b) {
@@ -386,7 +604,6 @@ class ActiveRideService extends ChangeNotifier {
     if (!resp.isSuccess()) return false;
     _rideStatus = 'paused';
     _geoSub?.pause();
-    if (_hasModule) await TraxApi.pauseSimulation(_serialNo);
     notifyListeners();
     return true;
   }
@@ -397,7 +614,6 @@ class ActiveRideService extends ChangeNotifier {
     if (!resp.isSuccess()) return false;
     _rideStatus = 'active';
     _geoSub?.resume();
-    if (_hasModule) await TraxApi.resumeSimulation(_serialNo);
     notifyListeners();
     return true;
   }
@@ -409,7 +625,6 @@ class ActiveRideService extends ChangeNotifier {
     if (_pendingPoints.isNotEmpty) await _uploadPendingPoints();
 
     final resp = await TraxApi.stopRide(_rideId!);
-    if (_hasModule) await TraxApi.stopSimulation(_serialNo);
     _cancelTimers();
 
     if (!resp.isSuccess()) return false;
@@ -432,7 +647,6 @@ class ActiveRideService extends ChangeNotifier {
     _source = null;
     _stats = null;
     _telemetry = null;
-    _forcePhoneGps = false;
     route.clear();
     displayDuration = 0;
     notifyListeners();
@@ -476,6 +690,74 @@ class ActiveRideService extends ChangeNotifier {
     _startBackgroundTimers();
   }
 
+  /// Attach the canonical GPS sampling pipeline to an already-created **race**
+  /// ride. The race ride is created server-side when the host hits "Go Race"
+  /// (one [RideRecord] per rider, owned by that rider, carrying the race
+  /// trail + target laps). This binds to the rider's active race ride — it
+  /// does **not** create a new ride.
+  ///
+  /// Multiplayer per-rider sampling is therefore identical to the solo lap
+  /// timer: 100 ms base cadence + 200 ms finish-line densification via the
+  /// adaptive-sampling anchors. Dense points batch-upload through
+  /// [_uploadPendingPoints] → `addRidePoints`, which drives the shared
+  /// finish-line / lap-detection pipeline on the backend.
+  ///
+  /// Returns false (and tracks nothing) if there is no active ride, the
+  /// active ride is not a race ride, or the ride is a module ride (module
+  /// bikes already record dense points via the MQTT ingest path).
+  Future<bool> startRaceTracking({
+    EBike? bike,
+    LatLng? finishLine,
+  }) async {
+    // Already tracking this race ride — nothing to do.
+    if (isActive && _source == 'race') return true;
+
+    final resp = await TraxApi.getActiveRide();
+    if (!resp.isSuccess() || resp.data == null) return false;
+    final data = resp.data as Map<String, dynamic>;
+    if ((data['source'] as String?) != 'race') return false;
+    // Module rides record their dense points via MQTT (ModuleTelemetryService
+    // → ingestModule); driving them through this phone pipeline too would
+    // double-write points. Only phone rides need the ActiveRideService path.
+    if ((data['mode'] as String?) == 'with_module') return false;
+
+    if (bike != null) _bike = bike;
+    _rideId = data['id'] as int;
+    _rideStatus = data['status'] as String? ?? 'active';
+    _mode = data['mode'] as String?;
+    _source = 'race';
+    _trailId = (data['trailId'] as num?)?.toInt();
+    _trailName = data['trailName'] as String?;
+    _targetLaps = (data['targetLaps'] as num?)?.toInt();
+    // Fresh tracking session — drop any stale route from a previous ride so
+    // consumers can use `route.isNotEmpty` to detect the first real fix.
+    route.clear();
+    _stats = null;
+    _telemetry = null;
+
+    final startTimeStr = data['startTime'] as String?;
+    if (startTimeStr != null) {
+      displayDuration =
+          DateTime.now().difference(DateTime.parse(startTimeStr)).inSeconds;
+    }
+
+    final statsResp = await TraxApi.getRideStats(_rideId!);
+    if (statsResp.isSuccess() && statsResp.data != null) {
+      _stats = RideStats.fromJson(statsResp.data as Map<String, dynamic>);
+      if (_stats!.durationSeconds > 0) displayDuration = _stats!.durationSeconds;
+    }
+
+    // Arm finish-line densification. A race over a Lap trail crosses the same
+    // line each lap, so start == end (identical to the solo lap timer).
+    if (finishLine != null) {
+      setSamplingAnchors(start: finishLine, end: finishLine);
+    }
+
+    notifyListeners();
+    _startBackgroundTimers();
+    return true;
+  }
+
   void _startBackgroundTimers() {
     _cancelTimers();
     _durationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -485,11 +767,13 @@ class ActiveRideService extends ChangeNotifier {
       }
     });
     _statsTimer = Timer.periodic(const Duration(seconds: 3), (_) => _pollStats());
+    _subscribeLapWs();
 
     // For phone GPS mode, restart GPS stream
     if (_mode == 'without_module') {
       _startPhoneGps();
     } else if (_mode == 'with_module' && _bike != null) {
+      _subscribeModuleWs();
       _telemetryTimer = Timer.periodic(const Duration(seconds: 2), (_) => _pollTelemetry());
     }
   }
@@ -508,7 +792,6 @@ class ActiveRideService extends ChangeNotifier {
     if (s.status == 'completed' && _rideStatus != 'completed') {
       _rideStatus = 'completed';
       _cancelTimers();
-      if (_hasModule) await TraxApi.stopSimulation(_serialNo);
     }
     notifyListeners();
   }
@@ -521,7 +804,10 @@ class ActiveRideService extends ChangeNotifier {
     final pos = LatLng(t.latitude, t.longitude);
     _telemetry = t;
     currentPos = pos;
-    route.add(pos);
+    if (isActive) {
+      route.add(pos);
+      _enqueueModulePoint(t);
+    }
     notifyListeners();
   }
 
@@ -540,11 +826,50 @@ class ActiveRideService extends ChangeNotifier {
     _uploadTimer?.cancel();
     _samplingPollTimer?.cancel();
     _geoSub?.cancel();
+    _wsSub?.cancel();
+    _wsClient?.dispose();
+    _lapWsSub?.cancel();
+    _lapWsClient?.dispose();
     _statsTimer = null;
     _telemetryTimer = null;
     _durationTimer = null;
     _uploadTimer = null;
     _samplingPollTimer = null;
     _geoSub = null;
+    _wsSub = null;
+    _wsClient = null;
+    _lapWsSub = null;
+    _lapWsClient = null;
+  }
+
+  /// Hard-reset called by the auth interceptor when a 401/403 forces
+  /// the user back to the welcome page. Cancels every background
+  /// timer / WS subscription and clears ride state so the abandoned
+  /// ride stops 401-spamming the API and bouncing the user off the
+  /// login form. Safe to call multiple times; no-op when already idle.
+  void forceResetForLogout() {
+    _cancelTimers();
+    _pendingPoints.clear();
+    _rideId = null;
+    _rideStatus = 'idle';
+    _bike = null;
+    _mode = null;
+    _source = null;
+    _stats = null;
+    _telemetry = null;
+    route.clear();
+    displayDuration = 0;
+    _trailId = null;
+    _trailName = null;
+    _targetLaps = null;
+    _anchorStart = null;
+    _anchorEnd = null;
+    _samplingMode = _SamplingMode.base;
+    _currentIntervalMs = _kBaseIntervalMs;
+    _lastDistToStartM = null;
+    _lastDistToEndM = null;
+    _lastAcceptedFixAt = null;
+    _consecutiveJumpDrops = 0;
+    notifyListeners();
   }
 }

@@ -21,6 +21,7 @@ import '../../../common/widgets/trax_dialog.dart';
 import '../../../models/ebike.dart';
 import '../../../models/trail.dart';
 import '../../../models/user_checkpoint.dart';
+import '../../../common/utils/map_styles.dart';
 import '../../../theme/app_theme.dart';
 import '../../../common/widgets/map_router.dart';
 import '../../ride/host_laps_page.dart';
@@ -350,7 +351,11 @@ class _TrailDetailPageAmapState extends State<TrailDetailPageAmap> {
       initialCameraPosition: AmapAdapter.initialCamera(_route, zoom: 14),
       polylines: {
         AmapAdapter.routePolyline(_route,
-            width: 4, color: AppColors.primary.withValues(alpha: 0.9)),
+            width: MapStyles.trailHaloWidth,
+            color: MapStyles.trailHaloColor),
+        AmapAdapter.routePolyline(_route,
+            width: MapStyles.trailWidth,
+            color: MapStyles.trailColor),
       },
       markers: {
         ...AmapAdapter.startFinishMarkers(_route),

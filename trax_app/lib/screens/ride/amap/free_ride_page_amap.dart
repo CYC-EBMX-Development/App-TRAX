@@ -1,4 +1,3 @@
-import 'package:amap_flutter_base/amap_flutter_base.dart' as amap;
 import 'package:amap_flutter_map/amap_flutter_map.dart' as amap_map;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
@@ -6,10 +5,14 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:get/get.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart' show LatLng;
-import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../../common/global/global_user_info.dart';
 import '../../../common/network/trax_api.dart';
+import '../../../common/utils/location_signal_gate.dart';
+import '../../../common/utils/keep_awake_mixin.dart';
+import '../../../common/services/location_service.dart';
+import '../../../common/widgets/my_location_fab.dart';
+import '../../../common/widgets/satellite_badge.dart';
 import '../../../common/utils/amap_adapter.dart';
 import '../../../common/utils/avatar_marker_icons_amap.dart';
 import '../../../common/widgets/map_router.dart';
@@ -17,6 +20,7 @@ import '../../../common/widgets/trax_dialog.dart';
 import '../../../models/ebike.dart';
 import '../../../models/module_telemetry.dart';
 import '../../../services/active_ride_service.dart';
+import '../../../common/utils/map_styles.dart';
 import '../../../theme/app_theme.dart';
 import 'package:trax_app/common/widgets/page_code_badge.dart';
 
@@ -33,16 +37,12 @@ class FreeRidePageAmap extends StatefulWidget {
   State<FreeRidePageAmap> createState() => _FreeRidePageAmapState();
 }
 
-class _FreeRidePageAmapState extends State<FreeRidePageAmap> {
+class _FreeRidePageAmapState extends State<FreeRidePageAmap>
+    with KeepAwakeMixin<FreeRidePageAmap> {
   final _svc = ActiveRideService.instance;
 
   amap_map.AMapController? _mapController;
   bool _mapReady = false;
-
-  bool _isPicking = false;
-  LatLng? _pickedLocation;
-  // Latest camera target reported by the SDK (in GCJ-02).
-  amap.LatLng? _cameraCenter;
 
   // Self-avatar marker for the live position pin.
   amap_map.BitmapDescriptor? _meIcon;
@@ -52,10 +52,13 @@ class _FreeRidePageAmapState extends State<FreeRidePageAmap> {
   @override
   void initState() {
     super.initState();
-    WakelockPlus.enable();
     _svc.addListener(_onServiceUpdate);
     _initLocation();
     _warmMeIcon();
+    // Pre-Start preview — see FreeRidePage for rationale.
+    if (_hasModule) {
+      _svc.previewModule(widget.selectedBike);
+    }
   }
 
   Future<void> _warmMeIcon() async {
@@ -77,8 +80,7 @@ class _FreeRidePageAmapState extends State<FreeRidePageAmap> {
     setState(() {});
     if (_mapReady &&
         _mapController != null &&
-        _svc.rideStatus != 'idle' &&
-        !_isPicking) {
+        _svc.rideStatus != 'idle') {
       _mapController!.moveCamera(
         amap_map.CameraUpdate.newLatLng(AmapAdapter.toAmap(_svc.currentPos)),
       );
@@ -86,6 +88,10 @@ class _FreeRidePageAmapState extends State<FreeRidePageAmap> {
   }
 
   Future<void> _initLocation() async {
+    // With-module bikes show the bike's position only — never the
+    // phone GPS. If the module has no signal yet, the map simply stays
+    // at the default camera until the first telemetry arrives.
+    if (_hasModule) return;
     var perm = await Geolocator.checkPermission();
     if (perm == LocationPermission.denied) {
       perm = await Geolocator.requestPermission();
@@ -115,51 +121,47 @@ class _FreeRidePageAmapState extends State<FreeRidePageAmap> {
   @override
   void dispose() {
     _svc.removeListener(_onServiceUpdate);
-    WakelockPlus.disable();
+    _svc.stopPreview();
     super.dispose();
   }
 
-  static const double _bottomPanelHeight = 240.0;
+  // ── My Location ───────────────────────────────────────────
 
-  double get _mapCenterY {
-    final screenH = MediaQuery.of(context).size.height;
-    return (screenH - _bottomPanelHeight) / 2;
-  }
-
-  Future<void> _onPickLocationTap() async {
-    if (_isPicking) {
-      final amapCenter = _cameraCenter;
-      if (amapCenter == null) return;
-      final wgs = AmapAdapter.fromAmap(amapCenter);
-      setState(() {
-        _isPicking = false;
-        _pickedLocation = wgs;
-        _svc.currentPos = wgs;
-      });
-      _mapController?.moveCamera(amap_map.CameraUpdate.newLatLng(amapCenter));
-    } else {
-      setState(() {
-        _isPicking = true;
-        _pickedLocation = null;
-      });
+  /// Recenter camera on user's current position. If no signal is available,
+  /// show a snackbar explaining whether the module or phone GPS is the
+  /// missing source.
+  Future<void> _onMyLocationTap() async {
+    if (_hasModule) {
+      if (_svc.telemetry == null) {
+        if (!mounted) return;
+        showTraxSnackBar(context, 'Unable to get bike module signal', isError: true);
+        return;
+      }
+      _animateToCurrentPos();
+      return;
     }
-  }
 
-  void _clearPickedLocation() {
-    setState(() {
-      _pickedLocation = null;
-      _isPicking = false;
-    });
-    _initLocation();
+    // Phone-GPS path: dual-source fix (Geolocator + AMap, first wins) so it
+    // also works indoors in mainland China and never hangs.
+    final fix = await LocationService.getFix();
+    if (!mounted) return;
+    if (fix == null) {
+      showTraxSnackBar(context, 'Unable to get phone GPS signal', isError: true);
+      return;
+    }
+    _svc.currentPos = fix;
+    setState(() {});
+    _animateToCurrentPos();
   }
 
   Future<void> _onStart() async {
+    final gateOk = await LocationSignalGate.ensureSignalOrConfirm(
+      context: context,
+      bike: widget.selectedBike,
+    );
+    if (!gateOk || !mounted) return;
     final ok = await _svc.startRide(widget.selectedBike);
     if (!mounted || !ok) return;
-    setState(() {
-      _pickedLocation = null;
-      _isPicking = false;
-    });
   }
 
   Future<void> _onPause() async => await _svc.pauseRide();
@@ -224,23 +226,39 @@ class _FreeRidePageAmapState extends State<FreeRidePageAmap> {
               target: AmapAdapter.toAmap(currentPos),
               zoom: 16,
             ),
+            // Native AMap blue-dot is phone GPS — hide it on module bikes
+            // so the map only ever shows the bike's location.
+            myLocationStyleOptions: amap_map.MyLocationStyleOptions(
+              !_hasModule,
+              circleFillColor: AppColors.primary.withValues(alpha: 0.15),
+              circleStrokeColor: AppColors.primary,
+              circleStrokeWidth: 1,
+            ),
             polylines: {
               if (route.length >= 2)
-                AmapAdapter.routePolyline(route, color: Colors.red),
+                AmapAdapter.routePolyline(route,
+                    color: MapStyles.rideTrackColor,
+                    width: MapStyles.rideTrackWidth),
             },
             markers: {
-              if (rideStatus == 'idle' &&
-                  _pickedLocation != null &&
-                  !_isPicking)
-                amap_map.Marker(
-                  position: AmapAdapter.toAmap(_pickedLocation!),
-                  icon: amap_map.BitmapDescriptor.defaultMarker,
-                ),
               if (rideStatus != 'idle' && route.isNotEmpty)
                 amap_map.Marker(
                   position: AmapAdapter.toAmap(currentPos),
                   icon: _meIcon ?? amap_map.BitmapDescriptor.defaultMarker,
                   anchor: const Offset(0.5, 0.5),
+                ),
+              // Pre-ride my-location dot for module bikes: native AMap
+              // blue-dot is suppressed when `_hasModule`, so draw our own
+              // once the module reports its first telemetry fix.
+              if (rideStatus == 'idle' &&
+                  _hasModule &&
+                  telemetry != null)
+                amap_map.Marker(
+                  position: AmapAdapter.toAmap(currentPos),
+                  icon: _meIcon ?? amap_map.BitmapDescriptor.defaultMarker,
+                  anchor: const Offset(0.5, 0.5),
+                  infoWindow:
+                      const amap_map.InfoWindow(title: 'My bike location'),
                 ),
             },
             scrollGesturesEnabled: true,
@@ -255,20 +273,7 @@ class _FreeRidePageAmapState extends State<FreeRidePageAmap> {
               setState(() => _mapReady = true);
               _animateToCurrentPos();
             },
-            onCameraMove: (pos) => _cameraCenter = pos.target,
-            onCameraMoveEnd: (pos) => _cameraCenter = pos.target,
           ),
-          if (_isPicking)
-            Positioned(
-              left: 0,
-              right: 0,
-              top: _mapCenterY - 20,
-              child: const IgnorePointer(
-                child: Center(
-                  child: Icon(Icons.add, size: 40, color: AppColors.error),
-                ),
-              ),
-            ),
           Positioned(
             top: safeTop + 8,
             left: 16,
@@ -281,108 +286,29 @@ class _FreeRidePageAmapState extends State<FreeRidePageAmap> {
               ),
             ),
           ),
-          if (rideStatus == 'idle')
-            Positioned(
-              top: safeTop + 8,
-              left: 72,
-              child: CircleAvatar(
-                backgroundColor:
-                    _isPicking ? AppColors.primary : AppColors.surface,
-                child: IconButton(
-                  icon: Icon(
-                    _isPicking ? Icons.check : Icons.pin_drop,
-                    color: _isPicking ? Colors.white : AppColors.textPrimary,
-                    size: 20,
-                  ),
-                  onPressed: _onPickLocationTap,
-                  tooltip: _isPicking ? 'Confirm Location' : 'Pick Location',
-                ),
-              ),
-            ),
-          if (_isPicking)
-            Positioned(
-              top: safeTop + 8,
-              left: 120,
-              right: 60,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: AppColors.surface,
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.1),
-                        blurRadius: 8),
-                  ],
-                ),
-                child: const Text(
-                  'Move map, then tap ✓ to confirm',
-                  style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            ),
-          if (rideStatus == 'idle' && _pickedLocation != null && !_isPicking)
-            Positioned(
-              top: safeTop + 8,
-              left: 120,
-              right: 60,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: AppColors.surface,
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.1),
-                        blurRadius: 8),
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.pin_drop,
-                        size: 16, color: AppColors.error),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        '${_pickedLocation!.latitude.toStringAsFixed(5)}, ${_pickedLocation!.longitude.toStringAsFixed(5)}',
-                        style: const TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.textPrimary),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    GestureDetector(
-                      onTap: _clearPickedLocation,
-                      child: const Icon(Icons.close,
-                          size: 16, color: AppColors.textSecondary),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          if (!_isPicking && _pickedLocation == null)
-            Positioned(
-              top: safeTop + 8,
-              right: 16,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  _GpsInfoChip(position: currentPos),
-                  if (_hasModule && telemetry != null) ...[
-                    const SizedBox(height: 8),
-                    _ModuleInfoChip(telemetry: telemetry),
-                  ],
+          Positioned(
+            right: 14,
+            bottom: 256, // bottom panel (~240) + 16 margin
+            child: MyLocationFab(onTap: _onMyLocationTap),
+          ),
+          Positioned(
+            top: safeTop + 8,
+            right: 16,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                _GpsInfoChip(position: currentPos),
+                if (_hasModule) ...[
+                  const SizedBox(height: 8),
+                  SatelliteBadge(count: telemetry?.satellites),
                 ],
-              ),
+                if (_hasModule && telemetry != null) ...[
+                  const SizedBox(height: 8),
+                  _ModuleInfoChip(telemetry: telemetry),
+                ],
+              ],
             ),
+          ),
           Positioned(
             left: 0,
             right: 0,

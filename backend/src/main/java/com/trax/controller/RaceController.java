@@ -151,6 +151,24 @@ public class RaceController {
         return ResponseEntity.ok(ApiResponse.success("Location updated"));
     }
 
+    /**
+     * Live-map participant position ONLY (no ride_point ingest, no lap detect).
+     * New clients drive dense GPS sampling through ActiveRideService
+     * (addRidePoints batch upload) and use this purely to broadcast their
+     * position to other riders on the live map.
+     */
+    @PostMapping("/{id}/position")
+    public ResponseEntity<ApiResponse<String>> reportPosition(
+            Authentication auth, @PathVariable Long id,
+            @RequestBody java.util.Map<String, Double> body) {
+        User user = (User) auth.getPrincipal();
+        Double lat = body.get("latitude");
+        Double lng = body.get("longitude");
+        if (lat == null || lng == null) throw new RuntimeException("latitude and longitude required");
+        raceService.updateParticipantPosition(id, user.getId(), lat, lng);
+        return ResponseEntity.ok(ApiResponse.success("Position updated"));
+    }
+
     /** Go! Start the actual race (host only) → in_progress */
     @PostMapping("/{id}/go")
     public ResponseEntity<ApiResponse<RaceDto>> goRace(

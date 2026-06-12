@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:wakelock_plus/wakelock_plus.dart';
 import 'dart:async';
+import '../../common/utils/keep_awake_mixin.dart';
 import '../../common/utils/map_gesture_recognizers.dart';
 import '../../common/utils/cp_marker_icons.dart';
 import '../../common/utils/avatar_marker_icons.dart';
 import '../../common/utils/start_end_marker_icons.dart';
-import 'package:geolocator/geolocator.dart';
+import '../../common/services/location_service.dart';
 import 'dart:math' as math;
 import '../../models/ebike.dart';
 import '../../models/trail.dart';
@@ -16,6 +16,7 @@ import '../../models/user_checkpoint.dart';
 import '../../services/active_ride_service.dart';
 import '../../common/network/trax_api.dart';
 import '../../common/widgets/trax_dialog.dart';
+import '../../common/utils/map_styles.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/lap_splits_grid.dart';
 import '../../common/widgets/map_router.dart';
@@ -42,8 +43,13 @@ class LapTimerPage extends StatefulWidget {
   State<LapTimerPage> createState() => _LapTimerPageState();
 }
 
-class _LapTimerPageState extends State<LapTimerPage> {
+class _LapTimerPageState extends State<LapTimerPage>
+    with KeepAwakeMixin<LapTimerPage> {
   final _svc = ActiveRideService.instance;
+
+  /// With-module bikes use the module's GPS, never the phone's. Keep this
+  /// in sync with the same predicate in `free_ride_page.dart`.
+  bool get _hasModule => widget.selectedBike.traxSerialNumber != null;
 
   GoogleMapController? _mapController;
   bool _mapReady = false;
@@ -55,18 +61,15 @@ class _LapTimerPageState extends State<LapTimerPage> {
   int _lastKnownLapCount = 0;
   final Map<int, double> _lapOverlaps = {}; // lapNumber -> overlap %
 
-  // ── Client-side start-line crossing detection ───────────
-  // The lap timer arms when the rider first enters the trail's start
-  // zone, then closes each lap on the next entry into the zone (after
-  // having left it). The timer is paused at 0:00 until the first arm.
-  // Lap counting is therefore the rider's own ground-truth crossing of
-  // the start/finish line, not a server-side guess.
-  DateTime? _lapStartedAt;
-  bool _wasInsideStart = false;
-  final List<RideLap> _localLaps = [];
-  static const int _minLapSeconds = 10;
+  // ── Display-only start-line gate ────────────────────────
+  // The server owns lap counting (`/ws/rides/{id}/laps` push + 3 s
+  // `/stats` poll, see ActiveRideService). The client only tracks one
+  // local timestamp so the in-progress lap timer in the HUD can read
+  // 0:00 until the rider physically reaches the start line for the
+  // first time — exact same gating as the AMap variant.
+  DateTime? _displayGateArmedAt;
   // Gate threshold in metres for arming the display timer (matches server
-  // LAP_FINISH_ZONE_KM = 30 m).
+  // LAP_FINISH_LINE_HALF_WIDTH_KM = 20 m, slightly padded for UX).
   static const double _gateArmMeters = 30.0;
 
   // User-defined checkpoints for this trail (used for live in-progress
@@ -87,8 +90,8 @@ class _LapTimerPageState extends State<LapTimerPage> {
   @override
   void initState() {
     super.initState();
-    // Keep the screen awake throughout the lap session.
-    WakelockPlus.enable();
+    // Screen stays awake for the whole lap session (KeepAwakeMixin); it
+    // also re-asserts the wakelock when iOS clears it on app resume.
     _svc.addListener(_onSvcUpdate);
     _loadTrailRoute();
     _loadUserCheckpoints();
@@ -114,7 +117,6 @@ class _LapTimerPageState extends State<LapTimerPage> {
   void dispose() {
     _svc.removeListener(_onSvcUpdate);
     _mapController?.dispose();
-    WakelockPlus.disable();
     super.dispose();
   }
 
@@ -195,77 +197,51 @@ class _LapTimerPageState extends State<LapTimerPage> {
   }
 
   Future<void> _initLocation() async {
-    try {
-      var perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied) {
-        perm = await Geolocator.requestPermission();
-      }
-      if (perm == LocationPermission.denied ||
-          perm == LocationPermission.deniedForever) return;
-      final pos = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
-      );
-      if (!mounted) return;
-      if (widget.startLocation == null && _svc.rideStatus == 'idle') {
-        _svc.currentPos = LatLng(pos.latitude, pos.longitude);
-        setState(() {});
-      }
-    } catch (_) {}
+    // Module bikes must never seed `_svc.currentPos` from the phone GPS —
+    // the camera waits for the first module telemetry packet instead.
+    if (_hasModule) return;
+    // Dual-source fix (Geolocator + AMap, first wins) — works indoors in
+    // mainland China and never hangs on a satellite-only lock.
+    final fix = await LocationService.getFix();
+    if (!mounted || fix == null) return;
+    if (widget.startLocation == null && _svc.rideStatus == 'idle') {
+      _svc.currentPos = fix;
+      setState(() {});
+    }
   }
 
   void _onSvcUpdate() {
     if (!mounted) return;
 
-    // ── Client-side start-line crossing detection ──────────
-    // Detect entering / leaving the start zone, then close laps on the
-    // re-entry edge. This is the source of truth for lap counting; we
-    // ignore server-reported laps (which arrive with delay and missed
-    // the "start counting when the rider crosses the line" requirement).
-    if (_svc.rideStatus == 'active' && _trailRoute.isNotEmpty) {
+    // Arm the display timer the first time the rider enters the start zone.
+    if (_displayGateArmedAt == null &&
+        _svc.rideStatus == 'active' &&
+        _trailRoute.isNotEmpty) {
       final d = _distMeters(_svc.currentPos, _trailRoute.first);
-      final inside = d <= _gateArmMeters;
-      if (inside && !_wasInsideStart) {
-        final now = DateTime.now();
-        if (_lapStartedAt == null) {
-          // First crossing of the start line — the lap timer arms now.
-          _lapStartedAt = now;
-        } else {
-          final elapsed = now.difference(_lapStartedAt!).inSeconds;
-          if (elapsed >= _minLapSeconds) {
-            // Close the in-progress lap and immediately start the next.
-            final lapNum = _localLaps.length + 1;
-            _localLaps.add(RideLap(
-              lapNumber: lapNum,
-              durationSeconds: elapsed,
-              distanceKm: 0,
-              startTime: _lapStartedAt,
-              endTime: now,
-            ));
-            _currentLapPasses.clear();
-            _currentLapNumberLive = _localLaps.length + 1;
-            _lapStartedAt = now;
-            // Auto-finish if target reached.
-            if (_localLaps.length >= widget.targetLaps &&
-                !_navigatedToSummary) {
-              _onTargetReached();
-            }
-          }
-        }
-      }
-      _wasInsideStart = inside;
+      if (d <= _gateArmMeters) _displayGateArmedAt = DateTime.now();
     }
 
-    // Keep _lastKnownLapCount/_lapOverlaps in sync with our local laps so
-    // the rest of the UI keeps reacting.
-    if (_localLaps.length > _lastKnownLapCount) {
-      _lastKnownLapCount = _localLaps.length;
+    // ── Server is the source of truth for laps. ──
+    // The 3 s stats poll + lap WS push (see ActiveRideService) keep
+    // `_svc.stats.laps` near-real-time. When the count changes we reset
+    // the in-progress CP-pass map and bump the displayed lap number.
+    final laps = _svc.stats?.laps ?? const <RideLap>[];
+    if (laps.length > _lastKnownLapCount) {
+      for (int i = _lastKnownLapCount; i < laps.length; i++) {
+        final lap = laps[i];
+        _lapOverlaps[lap.lapNumber] = lap.overlapPercent ?? 0;
+      }
+      _lastKnownLapCount = laps.length;
+      _currentLapPasses.clear();
+      _currentLapNumberLive = laps.length + 1;
     }
 
     // Live in-progress checkpoint-pass detection. Lap-elapsed is derived
-    // from _lapStartedAt; before the first arm it stays at 0.
+    // from the last completed lap's end time (or the display gate before
+    // the first crossing).
     if (_svc.rideStatus == 'active') {
-      final completed = _localLaps.length;
-      final lapElapsed = _currentLapElapsedSec(_localLaps);
+      final completed = laps.length;
+      final lapElapsed = _currentLapElapsedSec(laps);
       _currentLapNumberLive =
           (completed + 1).clamp(1, widget.targetLaps);
       for (final cp in _userCheckpoints) {
@@ -293,20 +269,23 @@ class _LapTimerPageState extends State<LapTimerPage> {
     }
   }
 
-  Future<void> _onTargetReached() async {
-    final rideId = _svc.rideId;
-    await _svc.stopRide();
-    if (!mounted || rideId == null) return;
-    _navigatedToSummary = true;
-    _goToSummary(rideId);
-  }
-
-  /// Seconds elapsed in the in-progress lap. Returns 0 until the rider
-  /// has crossed the trail start line (i.e. [_lapStartedAt] is set).
+  /// Seconds elapsed in the in-progress lap. Returns the time since the
+  /// last completed lap's end time, or — before the first lap — the time
+  /// since the rider first entered the start zone. Returns 0 if neither
+  /// has happened yet.
   int _currentLapElapsedSec(List<RideLap> laps) {
-    if (_lapStartedAt == null) return 0;
-    final s = DateTime.now().difference(_lapStartedAt!).inSeconds;
-    return s < 0 ? 0 : s;
+    if (laps.isNotEmpty) {
+      final lastEnd = laps.last.endTime;
+      if (lastEnd != null) {
+        final s = DateTime.now().difference(lastEnd).inSeconds;
+        return s < 0 ? 0 : s;
+      }
+    }
+    if (_displayGateArmedAt != null) {
+      final s = DateTime.now().difference(_displayGateArmedAt!).inSeconds;
+      return s < 0 ? 0 : s;
+    }
+    return 0;
   }
 
   /// Haversine distance in meters between two LatLng points.
@@ -390,13 +369,13 @@ class _LapTimerPageState extends State<LapTimerPage> {
 
   Widget _buildContent(BuildContext context) {
     final rideStatus = _svc.rideStatus;
-    final laps = _localLaps;
+    final laps = _svc.stats?.laps ?? const <RideLap>[];
     final completedLaps = laps.length;
     final currentLapNumber = (completedLaps + 1).clamp(1, widget.targetLaps);
     final isRunning = rideStatus == 'active' || rideStatus == 'paused';
 
-    // Current lap elapsed seconds — client-side: derived from
-    // [_lapStartedAt] (the moment the rider crossed the start line).
+    // Current lap elapsed seconds — derived from the last server-confirmed
+    // lap's end time (or the display gate before the first crossing).
     final totalSec = _svc.displayDuration;
     final currentLapSec = _currentLapElapsedSec(laps);
 
@@ -414,7 +393,10 @@ class _LapTimerPageState extends State<LapTimerPage> {
                   child: GoogleMap(
                     initialCameraPosition:
                         CameraPosition(target: mapTarget, zoom: 15),
-                    myLocationEnabled: true,
+                    // Match AMap variant: rider position is drawn as a
+                    // marker, no native blue dot. Avoids phone-GPS dot
+                    // leaking on top of the live module marker.
+                    myLocationEnabled: false,
                     myLocationButtonEnabled: false,
                     zoomControlsEnabled: false,
                     gestureRecognizers: kMapGestureRecognizers,
@@ -423,16 +405,16 @@ class _LapTimerPageState extends State<LapTimerPage> {
                         Polyline(
                           polylineId: const PolylineId('trail'),
                           points: _trailRoute,
-                          color: AppColors.primary.withValues(alpha: 0.5),
-                          width: 6,
+                          color: MapStyles.trailDimmedColor,
+                          width: MapStyles.trailWidth,
                           zIndex: 0,
                         ),
                       if (_svc.route.length >= 2)
                         Polyline(
                           polylineId: const PolylineId('ride'),
                           points: _svc.route,
-                          color: Colors.red,
-                          width: 6,
+                          color: MapStyles.rideTrackColor,
+                          width: MapStyles.rideTrackWidth,
                           zIndex: 1,
                         ),
                     },
@@ -456,7 +438,14 @@ class _LapTimerPageState extends State<LapTimerPage> {
                           infoWindow:
                               InfoWindow(title: 'CP${cp.sequenceIndex}'),
                         ),
-                      if (isRunning)
+                      // Show 'me' marker whenever the rider's position is
+                      // trustworthy: during the ride, OR pre-ride when the
+                      // module has reported its first telemetry fix. For
+                      // module bikes we suppress the marker until telemetry
+                      // arrives so we never draw it at the hard-coded
+                      // fallback `currentPos` (XBOTPARK).
+                      if (isRunning ||
+                          (_hasModule && _svc.telemetry != null))
                         Marker(
                           markerId: const MarkerId('me'),
                           position: _svc.currentPos,

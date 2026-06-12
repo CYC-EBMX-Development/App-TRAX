@@ -6,6 +6,7 @@ import '../../models/ebike.dart';
 import '../../models/ebike_model_data.dart';
 import '../../theme/app_theme.dart';
 import 'ebike_parts_page.dart';
+import 'module_detail_page.dart';
 import 'package:trax_app/common/widgets/page_code_badge.dart';
 
 class EbikeProfilePage extends StatefulWidget {
@@ -253,6 +254,7 @@ class _EbikeProfilePageState extends State<EbikeProfilePage> {
   }
 
   Widget _buildActionsCard() {
+    final hasModule = _bike.traxSerialNumber != null && _bike.traxSerialNumber!.isNotEmpty;
     return _SectionCard(
       title: 'Actions',
       child: Column(
@@ -260,6 +262,23 @@ class _EbikeProfilePageState extends State<EbikeProfilePage> {
           _ActionRow(icon: Icons.history, label: 'View ride history', onTap: () {}),
           const Divider(height: 1, color: AppColors.divider),
           _ActionRow(icon: Icons.settings_outlined, label: 'Motor settings', onTap: () {}),
+          if (hasModule) ...[
+            const Divider(height: 1, color: AppColors.divider),
+            _ActionRow(
+              icon: Icons.analytics_outlined,
+              label: 'Show module detail',
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => ModuleDetailPage(
+                      serialNo: _bike.traxSerialNumber!,
+                      bikeName: _bike.name,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
           const Divider(height: 1, color: AppColors.divider),
           _ActionRow(
               icon: Icons.delete_outline,

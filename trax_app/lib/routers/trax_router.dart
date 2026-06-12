@@ -71,6 +71,24 @@ class TraxRouter {
   static Future<void> toResetPwdSuccessPage() async => TraxNaviUtil.pushNamed(_resetPwdSuccessPage);
 
   static Future<void> toMainPageOffAll() async => TraxNaviUtil.pushAndRemoveAll(mainPage);
+
+  /// Routes that do NOT require a valid auth token. Used by
+  /// [AppTokenInterceptor] to avoid yanking the user off the login /
+  /// sign-up form when background 401s keep firing during the
+  /// post-logout settling window.
+  static const Set<String> _authRoutes = {
+    welcomePage,
+    _loginPage,
+    _forgotPwdPage,
+    _createAccountPage,
+    _createPwdPage,
+    _verificationPage,
+    _resetPwdPage,
+    _resetPwdSuccessPage,
+  };
+
+  static bool isAuthRoute(String? routeName) =>
+      routeName != null && _authRoutes.contains(routeName);
 }
 
 class WelcomeMiddleware extends GetMiddleware {

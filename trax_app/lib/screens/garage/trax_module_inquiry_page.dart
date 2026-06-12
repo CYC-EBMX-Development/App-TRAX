@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:universal_ble/universal_ble.dart';
 import '../../common/widgets/trax_refresh_button.dart';
 import '../../models/ebike.dart';
 import '../../models/tracker_result.dart';
@@ -188,6 +189,17 @@ class TraxModuleInquiryPage extends StatelessWidget {
   }
 
   Future<void> _onYes(BuildContext context) async {
+    // Force universal_ble to lazily instantiate CBCentralManager (iOS) /
+    // BluetoothAdapter (Android) right here, so the system Bluetooth
+    // permission prompt fires on this page rather than only after the
+    // scanning page mounts. Without this, the prompt can be delayed/
+    // skipped and the toggle never appears under Settings → TRAX.
+    try {
+      await UniversalBle.getBluetoothAvailabilityState();
+    } catch (_) {
+      // Non-fatal: AvailableDevicesPage will re-check and surface UI.
+    }
+    if (!context.mounted) return;
     final tracker = await Navigator.of(context).push<TrackerResult>(
       MaterialPageRoute(builder: (_) => const AvailableDevicesPage()),
     );

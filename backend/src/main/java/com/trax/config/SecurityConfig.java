@@ -26,7 +26,7 @@ public class SecurityConfig {
             .csrf(csrf -> csrf.disable())
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/auth/**", "/h2-console/**", "/api/trax-modules/**", "/api/bike-models/**", "/api/bikes/**", "/images/**", "/api/modules/**", "/api/mock/**").permitAll()
+                .requestMatchers("/api/auth/**", "/h2-console/**", "/api/trax-modules/**", "/api/bike-models/**", "/api/bikes/**", "/images/**", "/api/modules/**", "/api/mock/**", "/ws/**").permitAll()
                 .anyRequest().authenticated()
             )
             .headers(headers -> headers.frameOptions(fo -> fo.disable()))

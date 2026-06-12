@@ -17,6 +17,7 @@ import '../../common/global/global_user_info.dart';
 import '../../common/utils/trax_storage_util.dart';
 import '../../common/utils/map_gesture_recognizers.dart';
 import '../../common/widgets/trax_dialog.dart';
+import '../../common/utils/map_styles.dart';
 import '../../theme/app_theme.dart';
 import '../../common/widgets/map_router.dart';
 import '../ride/host_laps_page.dart';
@@ -307,10 +308,16 @@ class _TrailDetailPageState extends State<TrailDetailPage> {
                     ),
                     polylines: {
                       Polyline(
+                        polylineId: const PolylineId('trail_halo'),
+                        points: _route,
+                        color: MapStyles.trailHaloColor,
+                        width: MapStyles.trailHaloWidth,
+                      ),
+                      Polyline(
                         polylineId: const PolylineId('trail'),
                         points: _route,
-                        color: AppColors.primary.withValues(alpha: 0.9),
-                        width: 4,
+                        color: MapStyles.trailColor,
+                        width: MapStyles.trailWidth,
                       ),
                     },
                     markers: {

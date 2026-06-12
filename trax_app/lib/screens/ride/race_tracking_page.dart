@@ -5,17 +5,25 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../../common/utils/cp_marker_icons.dart';
+import '../../common/utils/keep_awake_mixin.dart';
 import '../../common/utils/map_gesture_recognizers.dart';
 import '../../common/utils/start_end_marker_icons.dart';
-import 'package:geolocator/geolocator.dart';
 import '../../common/global/global_user_info.dart';
 import '../../common/network/trax_api.dart';
+import '../../common/utils/location_signal_gate.dart';
+import '../../common/services/location_service.dart';
+import '../../common/services/module_telemetry_ws_client.dart';
+import '../../services/active_ride_service.dart';
 import '../../common/widgets/bike_picker.dart';
+import '../../common/widgets/my_location_fab.dart';
+import '../../common/widgets/satellite_badge.dart';
 import '../../common/widgets/trax_dialog.dart';
 import '../../common/widgets/trax_refresh_button.dart';
+import '../../models/module_telemetry.dart';
 import '../../models/race.dart';
 import '../../models/race_live_data.dart';
 import '../../models/user_checkpoint.dart';
+import '../../common/utils/map_styles.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/lap_splits_grid.dart';
 import 'race_detail_page.dart';
@@ -29,7 +37,7 @@ class RaceTrackingPage extends StatefulWidget {
 }
 
 class _RaceTrackingPageState extends State<RaceTrackingPage>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, KeepAwakeMixin<RaceTrackingPage> {
   Race? _race;
   RaceLiveData? _liveData;
   bool _initialLoading = true;
@@ -39,6 +47,14 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
   bool _mapReady = false;
   LatLng _myPos = const LatLng(0, 0);
   bool _hasLocation = false;
+  // True while a phone-GPS fix is in flight, so the 3 s reporting timer
+  // never stacks overlapping getCurrentPosition calls (Android forbids
+  // concurrent location requests; stacking them kills the channel).
+  bool _fixInFlight = false;
+  // Measured height of the bottom panel, so the My-Location FAB can float
+  // just above it (global convention: bottom-right of the map).
+  final GlobalKey _bottomPanelKey = GlobalKey();
+  double _bottomPanelHeight = 0;
   List<LatLng> _trailRoute = [];
   List<UserCheckpoint> _myCheckpoints = [];
   final Map<int, bool> _riderVisibility = {};
@@ -50,6 +66,16 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
   int _nextColorIndex = 0;
   List<Map<String, dynamic>> _myBikes = [];
   int? _selectedBikeId;
+
+  // Module-aware location source. When the selected bike has a TRAX
+  // module, [_moduleWs] streams live telemetry into [_myPos] and the
+  // 3 s [_locationTimer] re-broadcasts the latest module fix to the
+  // backend via [TraxApi.reportLocation]. When no module, the timer
+  // falls back to [Geolocator.getCurrentPosition].
+  ModuleTelemetryWsClient? _moduleWs;
+  StreamSubscription<Map<String, dynamic>>? _moduleWsSub;
+  String? _moduleSerial; // serial currently subscribed
+  int? _moduleSatellites; // latest live satellite count from the module
 
   static const List<Color> _riderColors = [
     // Curated multi-rider palette. Trail polyline uses AppColors.primary
@@ -77,6 +103,8 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
   void dispose() {
     _pollTimer?.cancel();
     _locationTimer?.cancel();
+    _moduleWsSub?.cancel();
+    _moduleWs?.dispose();
     _mapController?.dispose();
     _lapsTabCtrl?.dispose();
     super.dispose();
@@ -88,42 +116,140 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
       _riderColors[_colorIdx(userId) % _riderColors.length];
 
   Future<void> _initLocation() async {
-    try {
-      var perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied) {
-        perm = await Geolocator.requestPermission();
-      }
-      if (perm == LocationPermission.denied ||
-          perm == LocationPermission.deniedForever) return;
-      final pos = await Geolocator.getCurrentPosition(
-        locationSettings:
-            const LocationSettings(accuracy: LocationAccuracy.high),
-      );
-      if (!mounted) return;
-      setState(() {
-        _myPos = LatLng(pos.latitude, pos.longitude);
-        _hasLocation = true;
-      });
-      _animateTo(_myPos);
-    } catch (_) {}
+    // Do not unconditionally seed `_myPos` from the phone GPS — the rider's
+    // selected bike (loaded later in `_loadMyBikes`) may have a TRAX
+    // module, in which case the bike's own GPS is the only valid source.
+    // The actual initial fix is fetched in [_initLocationIfPhoneOnly] once
+    // we know the bike selection, and in `_startLocationReporting` for the
+    // ongoing stream.
+  }
+
+  /// Called after [_loadMyBikes] resolves the selected bike. Fetches a
+  /// one-shot phone GPS fix only when the chosen bike has no TRAX module.
+  Future<void> _initLocationIfPhoneOnly() async {
+    if (_hasLocation) return; // module WS already set _myPos
+    if (_currentBikeSerial() != null) return; // module bike — wait for WS
+    // Dual-source fix (Geolocator + AMap, first wins) so it also works
+    // indoors in mainland China and never hangs on a satellite-only lock.
+    final fix = await LocationService.getFix();
+    if (!mounted || fix == null) return;
+    setState(() {
+      _myPos = fix;
+      _hasLocation = true;
+    });
+    _animateTo(_myPos);
   }
 
   void _startLocationReporting() {
     _locationTimer?.cancel();
-    _locationTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
+    _ensureModuleSubscription();
+    _locationTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+      if (!mounted) return;
+      final serial = _currentBikeSerial();
+      final racing = _race?.isInProgress == true;
+
+      // ── Phone-GPS rider, race in progress ───────────────────────────
+      // Hand dense sampling to ActiveRideService — the SAME pipeline the
+      // solo lap timer uses (100 ms base + 200 ms finish-line densification).
+      // It batch-uploads ride_points via addRidePoints, which drives the
+      // shared finish-line / lap-detection path on the backend. This page
+      // only re-broadcasts the rider's position for the live map (no
+      // ride_point ingest → reportRacePosition, not reportLocation).
+      if (racing && serial == null) {
+        final svc = ActiveRideService.instance;
+        if (!(svc.isActive && svc.source == 'race')) {
+          await svc.startRaceTracking(
+            finishLine: _trailRoute.isNotEmpty ? _trailRoute.first : null,
+          );
+          if (!mounted) return;
+        }
+        // Only broadcast once the GPS stream has delivered a real fix
+        // (route is cleared on attach, so a non-empty route == first fix).
+        if (svc.route.isNotEmpty &&
+            _coordsValid(svc.currentPos.latitude, svc.currentPos.longitude)) {
+          final pos = svc.currentPos;
+          setState(() {
+            _myPos = pos;
+            _hasLocation = true;
+          });
+          TraxApi.reportRacePosition(
+              widget.raceId, pos.latitude, pos.longitude);
+        }
+        return;
+      }
+
+      // ── Module rider (any phase) ────────────────────────────────────
+      // Module bikes record their own dense ride_points via MQTT. Here we
+      // only re-broadcast the latest WS-cached fix for the live map.
+      if (serial != null) {
+        if (_hasLocation) {
+          TraxApi.reportRacePosition(
+              widget.raceId, _myPos.latitude, _myPos.longitude);
+        }
+        return;
+      }
+
+      // ── Phone rider, preparing phase (no race ride yet) ─────────────
+      // One-shot dual-source fix for the start-line lobby. Guard against
+      // overlapping requests: an un-throttled getCurrentPosition can take
+      // longer than the tick and Android forbids concurrent location
+      // requests — stacked calls kill the location channel entirely.
+      if (_fixInFlight) return;
+      _fixInFlight = true;
       try {
-        final pos = await Geolocator.getCurrentPosition(
-          locationSettings:
-              const LocationSettings(accuracy: LocationAccuracy.high),
-        );
-        if (!mounted) return;
+        final fix = await LocationService.getFix();
+        if (!mounted || fix == null) return;
         setState(() {
-          _myPos = LatLng(pos.latitude, pos.longitude);
+          _myPos = fix;
           _hasLocation = true;
         });
-        TraxApi.reportLocation(widget.raceId, pos.latitude, pos.longitude);
+        TraxApi.reportRacePosition(widget.raceId, fix.latitude, fix.longitude);
+      } finally {
+        _fixInFlight = false;
+      }
+    });
+  }
+
+  String? _currentBikeSerial() {
+    if (_selectedBikeId == null) return null;
+    final bike = _myBikes
+        .where((b) => (b['id'] as num?)?.toInt() == _selectedBikeId)
+        .firstOrNull;
+    final s = bike?['traxSerialNumber'] as String?;
+    return (s == null || s.isEmpty) ? null : s;
+  }
+
+  void _ensureModuleSubscription() {
+    final serial = _currentBikeSerial();
+    if (serial == _moduleSerial) return; // unchanged
+    // Tear down any previous WS before swapping.
+    _moduleWsSub?.cancel();
+    _moduleWs?.dispose();
+    _moduleWsSub = null;
+    _moduleWs = null;
+    _moduleSerial = serial;
+    if (serial == null) return;
+    final client = ModuleTelemetryWsClient(serialNo: serial);
+    _moduleWs = client;
+    _moduleWsSub = client.stream.listen((json) {
+      if (!mounted) return;
+      try {
+        final t = ModuleTelemetry.fromJson(json);
+        // Drop "no GNSS fix" sentinels (lat=90,lon=0) and null-island (0,0):
+        // the module emits these before it locks on, and they would teleport
+        // the marker / reported position to the North Pole.
+        if (!_coordsValid(t.latitude, t.longitude)) {
+          if (mounted) setState(() => _moduleSatellites = t.satellites);
+          return;
+        }
+        setState(() {
+          _myPos = LatLng(t.latitude, t.longitude);
+          _hasLocation = true;
+          _moduleSatellites = t.satellites;
+        });
       } catch (_) {}
     });
+    unawaited(client.connect());
   }
 
   void _animateTo(LatLng pos) {
@@ -132,23 +258,71 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
     }
   }
 
+  /// True for usable GPS coordinates. Mirrors the backend reject: drops the
+  /// module "no fix" sentinel (lat=90,lon=0), null-island (0,0) and any
+  /// out-of-range value.
+  static bool _coordsValid(double lat, double lon) {
+    if (lat.isNaN || lon.isNaN) return false;
+    if (lat >= 90.0 || lat <= -90.0) return false;
+    if (lon < -180.0 || lon > 180.0) return false;
+    if (lat == 0.0 && lon == 0.0) return false;
+    return true;
+  }
+
+  /// Fits the camera so the whole trail (plus the rider's own position when
+  /// available) is visible. The GoogleMap [padding] already reserves space
+  /// for the bottom panel, so the fitted track stays clear of the card. Used
+  /// in the preparing phase (issue #3) and re-run when the bottom card height
+  /// changes during the race (issue #4).
+  void _fitTrailToView() {
+    if (!_mapReady || _mapController == null) return;
+    final pts = <LatLng>[..._trailRoute];
+    if (_hasLocation) pts.add(_myPos);
+    if (pts.length < 2) {
+      if (pts.length == 1) _animateTo(pts.first);
+      return;
+    }
+    double minLat = pts.first.latitude, maxLat = pts.first.latitude;
+    double minLng = pts.first.longitude, maxLng = pts.first.longitude;
+    for (final p in pts) {
+      if (p.latitude < minLat) minLat = p.latitude;
+      if (p.latitude > maxLat) maxLat = p.latitude;
+      if (p.longitude < minLng) minLng = p.longitude;
+      if (p.longitude > maxLng) maxLng = p.longitude;
+    }
+    final bounds = LatLngBounds(
+      southwest: LatLng(minLat, minLng),
+      northeast: LatLng(maxLat, maxLng),
+    );
+    _mapController!
+        .animateCamera(CameraUpdate.newLatLngBounds(bounds, 56));
+  }
+
   Future<void> _goToMyLocation() async {
     if (_hasLocation) {
       _animateTo(_myPos);
       return;
     }
-    try {
-      final pos = await Geolocator.getCurrentPosition(
-        locationSettings:
-            const LocationSettings(accuracy: LocationAccuracy.high),
-      );
-      if (!mounted) return;
-      setState(() {
-        _myPos = LatLng(pos.latitude, pos.longitude);
-        _hasLocation = true;
-      });
-      _animateTo(_myPos);
-    } catch (_) {}
+    // Module bike but no telemetry yet — don't fall back to phone GPS, the
+    // module is the only valid source for this rider.
+    if (_currentBikeSerial() != null) {
+      showTraxSnackBar(context, 'Unable to get bike module signal',
+          isError: true);
+      return;
+    }
+    // Phone-GPS path: dual-source fix (Geolocator + AMap, first wins).
+    final fix = await LocationService.getFix();
+    if (!mounted) return;
+    if (fix == null) {
+      showTraxSnackBar(context, 'Unable to get phone GPS signal',
+          isError: true);
+      return;
+    }
+    setState(() {
+      _myPos = fix;
+      _hasLocation = true;
+    });
+    _animateTo(_myPos);
   }
 
   Future<void> _loadRace() async {
@@ -163,7 +337,9 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
       _loadMyBikes(race);
       _loadTrailRoute();
       _startPolling();
-      if (race.isPreparing) _startLocationReporting();
+      // Report our position whenever the race is live (preparing OR
+      // in-progress); _poll() keeps it running across state transitions.
+      if (race.isPreparing || race.isInProgress) _startLocationReporting();
     } else {
       setState(() => _initialLoading = false);
     }
@@ -182,6 +358,12 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
       _myBikes = list;
       _selectedBikeId = myPart?.bicycleId;
     });
+    // Bike list arrived after _startLocationReporting() — make sure the
+    // module subscription matches the now-known selection.
+    if (_locationTimer != null) _ensureModuleSubscription();
+    // Now that we know the bike, fetch an initial phone-GPS fix only if
+    // the bike has no module — module bikes wait for their WS telemetry.
+    _initLocationIfPhoneOnly();
   }
 
   Future<void> _onChangeBike(int? bikeId) async {
@@ -194,6 +376,9 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
         _race = race;
         _selectedBikeId = bikeId;
       });
+      // Bike (and therefore module) may have changed — re-evaluate
+      // which source feeds [_myPos] / reportLocation.
+      if (_locationTimer != null) _ensureModuleSubscription();
     } else {
       showTraxSnackBar(context, resp.message, isError: true);
     }
@@ -240,6 +425,10 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
       });
     }
     if (pts.isNotEmpty && !_hasLocation) _animateTo(pts.first);
+    // Issue #3: in the preparing phase fit the whole trail into view so the
+    // rider sees the full loop scaled appropriately. Deferred to the next
+    // frame so the map controller / panel height are settled.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _fitTrailToView());
   }
 
   void _startPolling() {
@@ -259,9 +448,17 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
 
     if (raceResp.isSuccess() && raceResp.data != null) {
       final race = Race.fromJson(raceResp.data as Map<String, dynamic>);
-      final wasNotInProgress = _race != null && !_race!.isInProgress;
       setState(() => _race = race);
-      if (race.isInProgress && wasNotInProgress) _locationTimer?.cancel();
+      // Broadcast our position for the ENTIRE race lifecycle — both
+      // "preparing" (so riders see each other on the start line) and
+      // "in_progress" (the actual race). This timer used to be cancelled
+      // at the preparing→in_progress transition, which silently stopped
+      // position reporting the moment the race started, so the rider's
+      // marker went stale on the backend and vanished from every map.
+      if ((race.isPreparing || race.isInProgress) &&
+          _locationTimer?.isActive != true) {
+        _startLocationReporting();
+      }
       if (race.isCompleted) {
         _pollTimer?.cancel();
         _locationTimer?.cancel();
@@ -448,6 +645,11 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
   double get _mapCenterY => MediaQuery.of(context).size.height / 2;
 
   Future<void> _onReady() async {
+    final gateOk = await LocationSignalGate.ensureSignalOrConfirmForSerial(
+      context: context,
+      traxSerial: _currentBikeSerial(),
+    );
+    if (!gateOk || !mounted) return;
     final resp = await TraxApi.readyForRace(widget.raceId);
     if (!mounted) return;
     if (resp.isSuccess()) {
@@ -458,6 +660,11 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
   }
 
   Future<void> _onGoRace() async {
+    final gateOk = await LocationSignalGate.ensureSignalOrConfirmForSerial(
+      context: context,
+      traxSerial: _currentBikeSerial(),
+    );
+    if (!gateOk || !mounted) return;
     final ok = await TraxDialog.confirm(context,
         title: 'Start Racing',
         message: 'Start the race for all riders?');
@@ -530,6 +737,28 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
     return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
   }
 
+  Map<int, List<LatLng>> _alignedRoutesByUser() {
+    final live = _liveData;
+    if (live == null || live.alignedFrames.isEmpty) return const {};
+    final routes = <int, List<LatLng>>{};
+    for (final frame in live.alignedFrames) {
+      for (final p in frame.riders) {
+        routes.putIfAbsent(p.userId, () => <LatLng>[])
+            .add(LatLng(p.latitude, p.longitude));
+      }
+    }
+    return routes;
+  }
+
+  Map<int, LatLng> _latestAlignedPosByUser() {
+    final live = _liveData;
+    if (live == null || live.alignedFrames.isEmpty) return const {};
+    final latest = live.alignedFrames.last;
+    return {
+      for (final p in latest.riders) p.userId: LatLng(p.latitude, p.longitude),
+    };
+  }
+
   @override
   Widget build(BuildContext context) => PageCodeBadge(code: '410', child: _buildContent(context));
 
@@ -572,13 +801,23 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
             myLocationEnabled: false,
             myLocationButtonEnabled: false,
             zoomControlsEnabled: false,
+            // Reserve the bottom-card area so fitted bounds and the Google
+            // logo stay above the panel (issues #3/#4: trail scaling adapts
+            // to the changing card height).
+            padding: EdgeInsets.only(bottom: _bottomPanelHeight),
             gestureRecognizers: kMapGestureRecognizers,
             polylines: _buildPolylines(riders),
             markers: _buildMarkers(riders),
             onMapCreated: (c) {
               _mapController = c;
               _mapReady = true;
-              if (_hasLocation) _animateTo(_myPos);
+              if (_hasLocation) {
+                _animateTo(_myPos);
+              } else if (_trailRoute.isNotEmpty) {
+                // Trail may have loaded before the map was ready — fit it now.
+                WidgetsBinding.instance
+                    .addPostFrameCallback((_) => _fitTrailToView());
+              }
             },
           ),
           // Top Bar
@@ -596,7 +835,6 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
                   _cpToggleBtn(),
                   const SizedBox(width: 8),
                 ],
-                _circleBtn(Icons.my_location, _goToMyLocation),
               ],
             ),
           ),
@@ -607,12 +845,27 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
               right: 12,
               child: _buildLiveRankingOverlay(riders),
             ),
+          // Live satellite count (module bikes; hidden while ranking shows)
+          if (_currentBikeSerial() != null &&
+              !(_race?.isInProgress == true && riders.isNotEmpty))
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 64,
+              right: 12,
+              child: SatelliteBadge(count: _moduleSatellites),
+            ),
+          // My Location — global convention: bottom-right of the map,
+          // above the bottom panel.
+          Positioned(
+            right: 14,
+            bottom: _bottomPanelHeight + 12,
+            child: MyLocationFab(onTap: _goToMyLocation),
+          ),
           // Bottom
           Positioned(
             bottom: 0,
             left: 0,
             right: 0,
-            child: _buildBottomPanel(riders),
+            child: _measureBottomPanel(_buildBottomPanel(riders)),
           ),
         ],
       ),
@@ -621,24 +874,28 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
 
   Set<Polyline> _buildPolylines(List<RiderLiveInfo> riders) {
     final polylines = <Polyline>{};
+    final alignedRoutes = _alignedRoutesByUser();
     if (_trailRoute.length >= 2) {
       polylines.add(Polyline(
         polylineId: const PolylineId('trail'),
         points: _trailRoute,
-        color: AppColors.primary.withValues(alpha: 0.35),
-        width: 6,
+        color: MapStyles.trailDimmedColor,
+        width: MapStyles.trailWidth,
         zIndex: 0,
       ));
     }
     // Req 4: later riders overlay earlier ones; trail stays at the bottom.
     for (var i = 0; i < riders.length; i++) {
       final r = riders[i];
-      if (r.route.length >= 2) {
+      final riderRoute = alignedRoutes[r.userId] ?? r.route;
+      if (riderRoute.length >= 2) {
         polylines.add(Polyline(
           polylineId: PolylineId('rider_${r.userId}'),
-          points: r.route,
+          points: riderRoute,
           color: _colorFor(r.userId),
-          width: 4,
+          // Rider tracks use the unified ride-track width so they read
+          // as thinner than the underlying trail polyline.
+          width: MapStyles.rideTrackWidth,
           zIndex: i + 1,
         ));
       }
@@ -648,6 +905,7 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
 
   Set<Marker> _buildMarkers(List<RiderLiveInfo> riders) {
     final markers = <Marker>{};
+    final latestAligned = _latestAlignedPosByUser();
     if (_trailRoute.isNotEmpty) {
       markers.add(Marker(
         markerId: const MarkerId('start'),
@@ -670,10 +928,12 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
         final shouldShow = r.status == 'ready' || _isHostUser(r.userId);
         if (!shouldShow) continue;
       }
-      if (r.latitude == 0 && r.longitude == 0) continue;
+      final aligned = latestAligned[r.userId];
+      final markerPos = aligned ?? LatLng(r.latitude, r.longitude);
+      if (markerPos.latitude == 0 && markerPos.longitude == 0) continue;
       markers.add(Marker(
         markerId: MarkerId('rider_${r.userId}'),
-        position: LatLng(r.latitude, r.longitude),
+        position: markerPos,
         icon: _markerIcons[r.userId] ??
             BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
         anchor: const Offset(0.5, 0.5),
@@ -727,6 +987,28 @@ class _RaceTrackingPageState extends State<RaceTrackingPage>
         ),
       ]),
     );
+  }
+
+  /// Wraps the bottom panel so its rendered height is measured after each
+  /// layout. The My-Location FAB floats [_bottomPanelHeight] + 12 above the
+  /// map bottom so it always sits just over the panel, whatever the race
+  /// phase renders there.
+  Widget _measureBottomPanel(Widget panel) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final ctx = _bottomPanelKey.currentContext;
+      if (ctx == null) return;
+      final h = (ctx.findRenderObject() as RenderBox?)?.size.height;
+      if (h != null && (h - _bottomPanelHeight).abs() > 1) {
+        setState(() => _bottomPanelHeight = h);
+        // Issue #4: the bottom card changes height between phases / as live
+        // data renders. Re-fit the trail so it stays fully visible above the
+        // resized card (the GoogleMap padding tracks _bottomPanelHeight).
+        WidgetsBinding.instance
+            .addPostFrameCallback((_) => _fitTrailToView());
+      }
+    });
+    return KeyedSubtree(key: _bottomPanelKey, child: panel);
   }
 
   Widget _buildBottomPanel(List<RiderLiveInfo> riders) {
